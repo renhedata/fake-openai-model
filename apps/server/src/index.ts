@@ -2,8 +2,24 @@ import cors from "cors";
 import express from "express";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { appRouter } from "./router.js";
-import { capturePrompt, chatInputSchema, createCompletion } from "./router.js";
-import { getPrompts, getPromptStats, subscribePromptAdded } from "./state.js";
+import {
+  capturePrompt,
+  chatInputSchema,
+  createFakeCompletion,
+  createFakeStreamText,
+  proxyConfigSchema,
+  upstreamModelsResponseSchema
+} from "./router.js";
+import {
+  addExchange,
+  completeExchange,
+  getDashboardState,
+  getModels,
+  getProxyConfig,
+  setModels,
+  setProxyConfig,
+  subscribeExchangeUpdated
+} from "./state.js";
 
 const app = express();
 const port = Number(process.env.PORT ?? 3000);
@@ -16,16 +32,10 @@ app.get("/health", (_req, res) => {
 });
 
 app.get("/v1/models", (_req, res) => {
+  const models = getModels();
   res.json({
     object: "list",
-    data: [
-      {
-        id: "fake-gpt-4o-mini",
-        object: "model",
-        created: 1710000000,
-        owned_by: "fake-model"
-      }
-    ]
+    data: models
   });
 });
 
@@ -38,10 +48,10 @@ app.get("/events/prompts", (req, res) => {
     res.write(`data: ${JSON.stringify(payload)}\n\n`);
   };
 
-  send({ type: "snapshot", items: getPrompts(), stats: getPromptStats() });
+  send({ type: "snapshot", state: getDashboardState() });
 
-  const unsubscribe = subscribePromptAdded((latest, items, stats) => {
-    send({ type: "update", latest, items, stats });
+  const unsubscribe = subscribeExchangeUpdated((latest, state) => {
+    send({ type: "update", latest, state });
   });
 
   req.on("close", () => {
@@ -50,17 +60,320 @@ app.get("/events/prompts", (req, res) => {
   });
 });
 
-app.post("/v1/chat/completions", async (req, res) => {
+app.get("/proxy/config", (_req, res) => {
+  res.json(getProxyConfig());
+});
+
+app.put("/proxy/config", (req, res) => {
+  const current = getProxyConfig();
+  const merged = { ...current, ...(req.body as Record<string, unknown>) };
+  const parsed = proxyConfigSchema.safeParse(merged);
+  if (!parsed.success) {
+    res.status(400).json({
+      error: {
+        message: "Invalid proxy config",
+        type: "invalid_request_error",
+        detail: parsed.error.issues.map((issue) => issue.message).join("; ")
+      }
+    });
+    return;
+  }
+
+  const sanitized = {
+    ...parsed.data,
+    baseUrl: parsed.data.baseUrl.trim(),
+    path: parsed.data.path.trim(),
+    apiKey: parsed.data.apiKey.trim(),
+    modelOverride: parsed.data.modelOverride.trim()
+  };
+  res.json(setProxyConfig(sanitized));
+});
+
+app.get("/proxy/models", (_req, res) => {
+  res.json({
+    object: "list",
+    data: getModels()
+  });
+});
+
+const getTestModel = () => {
+  const config = getProxyConfig();
+  if (config.modelOverride.trim()) {
+    return config.modelOverride.trim();
+  }
+  const first = getModels()[0];
+  return first?.id ?? "gpt-4o-mini";
+};
+
+const extractResponsePreview = (payload: unknown) => {
+  if (typeof payload === "string") {
+    return payload.slice(0, 300);
+  }
+  if (!payload || typeof payload !== "object") {
+    return "";
+  }
+  const record = payload as {
+    output_text?: string;
+    choices?: Array<{ message?: { content?: string }; text?: string }>;
+    output?: Array<{ content?: Array<{ text?: string }> }>;
+    error?: { message?: string };
+  };
+  if (typeof record.output_text === "string" && record.output_text.trim()) {
+    return record.output_text.slice(0, 300);
+  }
+  const choiceContent = record.choices?.[0]?.message?.content;
+  if (typeof choiceContent === "string" && choiceContent.trim()) {
+    return choiceContent.slice(0, 300);
+  }
+  const choiceText = record.choices?.[0]?.text;
+  if (typeof choiceText === "string" && choiceText.trim()) {
+    return choiceText.slice(0, 300);
+  }
+  const outputText = record.output?.[0]?.content?.[0]?.text;
+  if (typeof outputText === "string" && outputText.trim()) {
+    return outputText.slice(0, 300);
+  }
+  const errorText = record.error?.message;
+  if (typeof errorText === "string" && errorText.trim()) {
+    return errorText.slice(0, 300);
+  }
+  return JSON.stringify(payload).slice(0, 300);
+};
+
+const resolveAuthorization = (req: express.Request, apiKey: string) => {
+  if (apiKey.trim()) {
+    return `Bearer ${apiKey.trim()}`;
+  }
+  const incoming = req.header("authorization");
+  return typeof incoming === "string" ? incoming : "";
+};
+
+const resolveUpstreamUrl = (baseUrl: string, path: string) => {
+  const trimmedBase = baseUrl.trim();
+  const trimmedPath = path.trim();
+
+  if (trimmedPath.startsWith("http://") || trimmedPath.startsWith("https://")) {
+    return trimmedPath;
+  }
+  if (!trimmedBase) {
+    throw new Error("Missing upstream baseUrl");
+  }
+  return new URL(trimmedPath || "/v1/chat/completions", trimmedBase).toString();
+};
+
+app.post("/proxy/models/refresh", async (req, res) => {
+  const config = getProxyConfig();
+  const authorization = resolveAuthorization(req, config.apiKey);
+
+  let modelsUrl = "";
   try {
-    const input = chatInputSchema.parse(req.body);
-    if (input.stream) {
-      const { captured } = capturePrompt(input);
-      const content =
-        [
-          "这是一个假的流式响应。",
-          "系统已抓取你的提示词。",
-          captured ? `提示词摘要：${captured.slice(0, 120)}` : "提示词为空。"
-        ].join(" ") || "fake response";
+    modelsUrl = resolveUpstreamUrl(config.baseUrl, "/v1/models");
+  } catch (error) {
+    res.status(400).json({
+      error: {
+        message: "Invalid upstream baseUrl",
+        type: "invalid_request_error",
+        detail: error instanceof Error ? error.message : "baseUrl is invalid"
+      }
+    });
+    return;
+  }
+
+  try {
+    const upstreamResponse = await fetch(modelsUrl, {
+      method: "GET",
+      headers: {
+        ...(authorization ? { authorization } : {})
+      }
+    });
+    const text = await upstreamResponse.text();
+    const payload = tryParseJson(text);
+
+    if (!upstreamResponse.ok) {
+      res.status(upstreamResponse.status).json({
+        error: {
+          message: "Failed to fetch upstream models",
+          type: "api_error",
+          detail: typeof payload === "string" ? payload : payload
+        }
+      });
+      return;
+    }
+
+    const parsed = upstreamModelsResponseSchema.safeParse(payload);
+    if (!parsed.success) {
+      res.status(502).json({
+        error: {
+          message: "Invalid upstream models response",
+          type: "api_error",
+          detail: parsed.error.issues.map((issue) => issue.message).join("; ")
+        }
+      });
+      return;
+    }
+
+    const syncedModels = setModels(
+      parsed.data.data.map((item) => ({
+        id: item.id,
+        object: item.object ?? "model",
+        created: item.created ?? Math.floor(Date.now() / 1000),
+        owned_by: item.owned_by ?? "upstream"
+      }))
+    );
+
+    res.json({
+      object: "list",
+      data: syncedModels
+    });
+  } catch (error) {
+    res.status(502).json({
+      error: {
+        message: "Failed to fetch upstream models",
+        type: "api_error",
+        detail: error instanceof Error ? error.message : "unknown upstream error"
+      }
+    });
+  }
+});
+
+app.post("/proxy/test", async (req, res) => {
+  const config = getProxyConfig();
+  const authorization = resolveAuthorization(req, config.apiKey);
+  const model = getTestModel();
+
+  let upstreamUrl = "";
+  try {
+    upstreamUrl = resolveUpstreamUrl(config.baseUrl, config.path);
+  } catch (error) {
+    res.status(400).json({
+      error: {
+        message: "Invalid upstream config",
+        type: "invalid_request_error",
+        detail: error instanceof Error ? error.message : "invalid upstream url"
+      }
+    });
+    return;
+  }
+
+  const body =
+    config.apiType === "responses"
+      ? {
+          model,
+          input: "Ping. Reply with pong.",
+          max_output_tokens: 32,
+          stream: false
+        }
+      : {
+          model,
+          messages: [{ role: "user", content: "Ping. Reply with pong." }],
+          max_tokens: 32,
+          stream: false
+        };
+
+  const startedAt = Date.now();
+
+  try {
+    const upstreamResponse = await fetch(upstreamUrl, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(authorization ? { authorization } : {})
+      },
+      body: JSON.stringify(body)
+    });
+    const text = await upstreamResponse.text();
+    const payload = tryParseJson(text);
+    const durationMs = Date.now() - startedAt;
+
+    res.json({
+      ok: upstreamResponse.ok,
+      apiType: config.apiType,
+      model,
+      upstreamUrl,
+      upstreamStatusCode: upstreamResponse.status,
+      durationMs,
+      preview: extractResponsePreview(payload),
+      raw: payload
+    });
+  } catch (error) {
+    res.status(502).json({
+      error: {
+        message: "Upstream test failed",
+        type: "api_error",
+        detail: error instanceof Error ? error.message : "unknown upstream error"
+      }
+    });
+  }
+});
+
+const tryParseJson = (value: string) => {
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return value;
+  }
+};
+
+const extractAssistantContentFromSse = (raw: string) => {
+  let content = "";
+  for (const line of raw.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("data:")) {
+      continue;
+    }
+    const data = trimmed.slice(5).trim();
+    if (!data || data === "[DONE]") {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(data) as {
+        choices?: Array<{ delta?: { content?: string }; message?: { content?: string } }>;
+      };
+      const deltaContent = parsed.choices?.[0]?.delta?.content;
+      if (typeof deltaContent === "string") {
+        content += deltaContent;
+      }
+      const messageContent = parsed.choices?.[0]?.message?.content;
+      if (typeof messageContent === "string") {
+        content += messageContent;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return content.trim();
+};
+
+app.post("/v1/chat/completions", async (req, res) => {
+  const parsed = chatInputSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({
+      error: {
+        message: "Invalid request body",
+        type: "invalid_request_error",
+        detail: parsed.error.issues.map((issue) => issue.message).join("; ")
+      }
+    });
+    return;
+  }
+
+  const input = parsed.data;
+  const { captured, promptTokens } = capturePrompt(input);
+  const config = getProxyConfig();
+  const model = config.modelOverride.trim() || input.model;
+  const normalizedInput = model === input.model ? input : { ...input, model };
+  const record = addExchange({
+    mode: config.mode,
+    model: normalizedInput.model,
+    prompt: captured,
+    promptTokens,
+    requestBody: normalizedInput
+  });
+
+  if (config.mode === "capture_only") {
+    if (normalizedInput.stream) {
+      const content = createFakeStreamText(captured);
+      const startedAt = Date.now();
       const id = `chatcmpl_${Date.now()}`;
       const created = Math.floor(Date.now() / 1000);
       const chunks = content.match(/.{1,12}/g) ?? [content];
@@ -77,7 +390,7 @@ app.post("/v1/chat/completions", async (req, res) => {
         id,
         object: "chat.completion.chunk",
         created,
-        model: input.model,
+        model: normalizedInput.model,
         choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null }]
       });
 
@@ -86,7 +399,7 @@ app.post("/v1/chat/completions", async (req, res) => {
           id,
           object: "chat.completion.chunk",
           created,
-          model: input.model,
+          model: normalizedInput.model,
           choices: [{ index: 0, delta: { content: part }, finish_reason: null }]
         });
       }
@@ -95,20 +408,154 @@ app.post("/v1/chat/completions", async (req, res) => {
         id,
         object: "chat.completion.chunk",
         created,
-        model: input.model,
+        model: normalizedInput.model,
         choices: [{ index: 0, delta: {}, finish_reason: "stop" }]
       });
       res.write("data: [DONE]\n\n");
       res.end();
+
+      completeExchange(record.id, {
+        responseStatus: "success",
+        responseBody: {
+          stream: true,
+          content
+        },
+        durationMs: Date.now() - startedAt
+      });
       return;
     }
 
-    res.json(createCompletion(input));
-  } catch {
+    const completion = createFakeCompletion(normalizedInput, promptTokens);
+    completeExchange(record.id, {
+      responseStatus: "success",
+      responseBody: completion,
+      durationMs: 0
+    });
+    res.json(completion);
+    return;
+  }
+
+  const startedAt = Date.now();
+  let upstreamUrl = "";
+  try {
+    upstreamUrl = resolveUpstreamUrl(config.baseUrl, config.path);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "invalid upstream config";
+    completeExchange(record.id, {
+      responseStatus: "error",
+      errorMessage: message,
+      durationMs: Date.now() - startedAt
+    });
     res.status(400).json({
       error: {
-        message: "Invalid request body",
-        type: "invalid_request_error"
+        message: "Invalid upstream config",
+        type: "invalid_request_error",
+        detail: message
+      }
+    });
+    return;
+  }
+
+  const authorization = resolveAuthorization(req, config.apiKey);
+
+  try {
+    const upstreamResponse = await fetch(upstreamUrl, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(authorization ? { authorization } : {})
+      },
+      body: JSON.stringify(normalizedInput)
+    });
+
+    if (normalizedInput.stream) {
+      const contentType = upstreamResponse.headers.get("content-type") ?? "text/event-stream; charset=utf-8";
+      const cacheControl = upstreamResponse.headers.get("cache-control") ?? "no-cache";
+      res.status(upstreamResponse.status);
+      res.setHeader("Content-Type", contentType);
+      res.setHeader("Cache-Control", cacheControl);
+      res.setHeader("Connection", "keep-alive");
+
+      const captureLimit = 24000;
+      let capturedSse = "";
+      const decoder = new TextDecoder();
+
+      if (upstreamResponse.body) {
+        const reader = upstreamResponse.body.getReader();
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) {
+            break;
+          }
+          if (!value) {
+            continue;
+          }
+          res.write(Buffer.from(value));
+          if (capturedSse.length < captureLimit) {
+            const decoded = decoder.decode(value, { stream: true });
+            const remaining = captureLimit - capturedSse.length;
+            capturedSse += decoded.slice(0, remaining);
+          } else {
+            decoder.decode(value, { stream: true });
+          }
+        }
+      }
+
+      if (capturedSse.length < captureLimit) {
+        const tail = decoder.decode();
+        const remaining = captureLimit - capturedSse.length;
+        capturedSse += tail.slice(0, remaining);
+      }
+
+      res.end();
+      completeExchange(record.id, {
+        responseStatus: upstreamResponse.ok ? "success" : "error",
+        responseBody: {
+          stream: true,
+          assistant: extractAssistantContentFromSse(capturedSse),
+          rawSse: capturedSse
+        },
+        upstreamUrl,
+        upstreamStatusCode: upstreamResponse.status,
+        durationMs: Date.now() - startedAt,
+        errorMessage: upstreamResponse.ok ? undefined : `upstream returned ${upstreamResponse.status}`
+      });
+      return;
+    }
+
+    const text = await upstreamResponse.text();
+    const upstreamParsed = tryParseJson(text);
+
+    completeExchange(record.id, {
+      responseStatus: upstreamResponse.ok ? "success" : "error",
+      responseBody: upstreamParsed,
+      upstreamUrl,
+      upstreamStatusCode: upstreamResponse.status,
+      durationMs: Date.now() - startedAt,
+      errorMessage: upstreamResponse.ok ? undefined : `upstream returned ${upstreamResponse.status}`
+    });
+
+    const upstreamType = upstreamResponse.headers.get("content-type") ?? "";
+    if (upstreamType.includes("application/json") && typeof upstreamParsed !== "string") {
+      res.status(upstreamResponse.status).json(upstreamParsed);
+      return;
+    }
+
+    res.status(upstreamResponse.status).send(text);
+    return;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "unknown upstream error";
+    completeExchange(record.id, {
+      responseStatus: "error",
+      errorMessage: message,
+      upstreamUrl,
+      durationMs: Date.now() - startedAt
+    });
+    res.status(502).json({
+      error: {
+        message: "Upstream request failed",
+        type: "api_error",
+        detail: message
       }
     });
   }

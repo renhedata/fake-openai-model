@@ -10,6 +10,7 @@ export default defineConfig(({ mode }) => {
     server: {
       proxy: {
         "/v1": backendTarget,
+        "/proxy": backendTarget,
         "/events": backendTarget,
         "/trpc": backendTarget
       }
