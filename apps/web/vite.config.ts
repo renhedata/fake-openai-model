@@ -12,8 +12,13 @@ export default defineConfig(({ mode }) => {
         "/v1": backendTarget,
         "/proxy": backendTarget,
         "/events": backendTarget,
-        "/trpc": backendTarget
+        "/trpc": backendTarget,
+        "/health": backendTarget
       }
+    },
+    build: {
+      outDir: "dist",
+      emptyOutDir: true
     }
   };
 });

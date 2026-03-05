@@ -2,6 +2,36 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
+import { formatDistanceToNow, format } from "date-fns";
+import { zhCN } from "date-fns/locale";
+import {
+  Activity,
+  ArrowUpDown,
+  CheckCircle2,
+  ChevronDown,
+  ChevronRight,
+  Clock,
+  ExternalLink,
+  Hash,
+  Loader2,
+  Radio,
+  RefreshCw,
+  Search,
+  Send,
+  Settings2,
+  Shield,
+  X,
+  Zap,
+  XCircle,
+  Copy,
+  Check,
+  Server,
+  Filter,
+  Coins,
+  type LucideIcon
+} from "lucide-react";
+
+/* ========== types ========== */
 
 type ProxyMode = "capture_only" | "forward";
 type ApiType = "chat_completions" | "responses";
@@ -39,12 +69,7 @@ type ExchangeStats = {
   totalCaptureOnly: number;
 };
 
-type ModelRecord = {
-  id: string;
-  object: string;
-  created: number;
-  owned_by: string;
-};
+type ModelRecord = { id: string; object: string; created: number; owned_by: string };
 
 type DashboardState = {
   items: ExchangeRecord[];
@@ -70,15 +95,298 @@ type UpstreamTestResult = {
   raw: unknown;
 };
 
-type DetailModalState = {
-  title: string;
-  markdown: string;
+/* ========== helpers ========== */
+
+const PAGE_SIZE = 40;
+const apiTypeToPath = (t: ApiType) => (t === "responses" ? "/v1/responses" : "/v1/chat/completions");
+const pathToApiType = (p: string): ApiType => (p.includes("/responses") ? "responses" : "chat_completions");
+
+const normalizeConfig = (v?: Partial<ProxyConfig>): ProxyConfig => {
+  const rawPath = v?.path ?? "/v1/chat/completions";
+  const apiType = v?.apiType ?? pathToApiType(rawPath);
+  return {
+    mode: v?.mode ?? "capture_only",
+    apiType,
+    baseUrl: v?.baseUrl ?? "https://api.openai.com/v1",
+    path: v?.path ?? apiTypeToPath(apiType),
+    apiKey: v?.apiKey ?? "",
+    modelOverride: v?.modelOverride ?? ""
+  };
 };
 
-type SettingsModalProps = {
+const defaultConfig: ProxyConfig = normalizeConfig();
+
+const emptyState: DashboardState = {
+  items: [],
+  stats: { totalRequests: 0, totalPromptTokens: 0, totalForwarded: 0, totalCaptureOnly: 0 },
+  config: defaultConfig,
+  models: []
+};
+
+const formatTime = (iso: string) => format(new Date(iso), "MM-dd HH:mm:ss", { locale: zhCN });
+const formatTimeFull = (iso: string) => format(new Date(iso), "yyyy-MM-dd HH:mm:ss", { locale: zhCN });
+const formatRelative = (iso: string) => formatDistanceToNow(new Date(iso), { addSuffix: true, locale: zhCN });
+
+const safeStringify = (v: unknown) => {
+  try { return JSON.stringify(v, null, 2); } catch { return String(v); }
+};
+
+const getResponseText = (v: unknown): string => {
+  if (!v || typeof v !== "object") return "";
+  const r = v as {
+    choices?: Array<{ message?: { content?: string } }>;
+    assistant?: string;
+    content?: string;
+    output_text?: string;
+  };
+  if (typeof r.assistant === "string") return r.assistant;
+  if (typeof r.output_text === "string") return r.output_text;
+  if (typeof r.content === "string") return r.content;
+  return typeof r.choices?.[0]?.message?.content === "string" ? r.choices[0].message.content : "";
+};
+
+/** Extract completion tokens from response body */
+const getCompletionTokens = (v: unknown): number => {
+  if (!v || typeof v !== "object") return 0;
+  const r = v as {
+    usage?: { completion_tokens?: number; total_tokens?: number; prompt_tokens?: number };
+    stream?: boolean;
+    assistant?: string;
+    content?: string;
+  };
+  if (r.usage?.completion_tokens && typeof r.usage.completion_tokens === "number") {
+    return r.usage.completion_tokens;
+  }
+  // For streaming responses, estimate from content length
+  if (r.stream) {
+    const text = typeof r.assistant === "string" ? r.assistant : typeof r.content === "string" ? r.content : "";
+    return text ? Math.max(1, Math.ceil(text.length / 4)) : 0;
+  }
+  // Try to estimate from response text
+  const text = getResponseText(v);
+  return text ? Math.max(1, Math.ceil(text.length / 4)) : 0;
+};
+
+const buildResponseMarkdown = (v: unknown) => {
+  const t = getResponseText(v);
+  return t.trim() ? t : `\`\`\`json\n${safeStringify(v ?? {})}\n\`\`\``;
+};
+
+const truncate = (s: string, n = 120) => (s.length <= n ? s : `${s.slice(0, n)}…`);
+
+/* ========== atoms ========== */
+
+const StatusDot = ({ ok, label }: { ok: boolean; label: string }) => (
+  <span className={`inline-flex items-center gap-1.5 text-[11px] font-medium ${ok ? "text-success" : "text-error"}`}>
+    <span className={`h-1.5 w-1.5 rounded-full ${ok ? "bg-success animate-pulse" : "bg-error"}`} />
+    {label}
+  </span>
+);
+
+const Badge = ({ children, variant = "default" }: { children: React.ReactNode; variant?: "success" | "error" | "warning" | "info" | "default" }) => {
+  const cls: Record<string, string> = {
+    success: "bg-success/15 text-success border-success/20",
+    error: "bg-error/15 text-error border-error/20",
+    warning: "bg-warning/15 text-warning border-warning/20",
+    info: "bg-info/15 text-info border-info/20",
+    default: "bg-base-content/5 text-base-content/60 border-base-content/10"
+  };
+  return <span className={`inline-flex items-center gap-1 rounded border px-1.5 py-px text-[10px] font-medium leading-tight ${cls[variant]}`}>{children}</span>;
+};
+
+const CopyButton = ({ text }: { text: string }) => {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  };
+  return (
+    <button onClick={copy} className="btn btn-ghost btn-xs gap-1 h-6 min-h-0" type="button" title="复制">
+      {copied ? <Check size={11} className="text-success" /> : <Copy size={11} />}
+    </button>
+  );
+};
+
+const StatMini = ({ icon: Icon, label, value }: { icon: LucideIcon; label: string; value: number | string }) => (
+  <div className="flex items-center gap-2 rounded-lg border border-base-content/5 bg-base-100 px-3 py-2">
+    <Icon size={14} className="text-base-content/30 shrink-0" />
+    <div className="min-w-0">
+      <div className="text-[10px] uppercase tracking-wider text-base-content/40">{label}</div>
+      <div className="text-sm font-bold tabular-nums leading-tight">{value}</div>
+    </div>
+  </div>
+);
+
+const MarkdownSurface = ({ markdown }: { markdown: string }) => (
+  <div className="markdown-body markdown-surface">
+    <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+      {markdown}
+    </ReactMarkdown>
+  </div>
+);
+
+/* ========== Exchange Row (with inline expand) ========== */
+
+const ExchangeRow = memo(function ExchangeRow({
+  item,
+  serial,
+  expanded,
+  onToggle
+}: {
+  item: ExchangeRecord;
+  serial: number;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const promptPreview = truncate(item.prompt || "(空)", 140);
+  const responseText = getResponseText(item.responseBody);
+  const responsePreview = truncate(responseText || safeStringify(item.responseBody ?? ""), 140);
+  const completionTokens = getCompletionTokens(item.responseBody);
+  const totalTokens = item.promptTokens + completionTokens;
+
+  const responseMd = buildResponseMarkdown(item.responseBody);
+  const statusVariant = item.responseStatus === "success" ? "success" : item.responseStatus === "error" ? "error" : "warning";
+
+  return (
+    <div className={`rounded-lg border transition-all ${expanded ? "border-primary/30 bg-base-100 shadow-lg shadow-primary/5" : "border-base-content/5 bg-base-100 hover:border-base-content/10"}`}>
+      {/* clickable summary row */}
+      <button
+        type="button"
+        className="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-base-content/[0.02]"
+        onClick={onToggle}
+      >
+        {expanded
+          ? <ChevronDown size={14} className="shrink-0 text-primary" />
+          : <ChevronRight size={14} className="shrink-0 text-base-content/30" />}
+
+        <span className="mono w-8 shrink-0 text-[11px] text-base-content/25">#{serial}</span>
+
+        <Badge variant={statusVariant}>
+          {item.responseStatus === "success" ? <CheckCircle2 size={9} /> : item.responseStatus === "error" ? <XCircle size={9} /> : <Loader2 size={9} className="animate-spin" />}
+          {item.responseStatus}
+        </Badge>
+
+        <Badge variant={item.mode === "forward" ? "info" : "default"}>
+          {item.mode === "forward" ? "FWD" : "CAP"}
+        </Badge>
+
+        <span className="mono shrink-0 text-[11px] text-base-content/50 w-24 truncate" title={item.model}>{item.model}</span>
+
+        {/* tokens */}
+        <span className="shrink-0 text-[10px] tabular-nums text-base-content/40" title={`入:${item.promptTokens} 出:${completionTokens} 总:${totalTokens}`}>
+          <span className="text-info/60">{item.promptTokens}</span>
+          <span className="text-base-content/20"> / </span>
+          <span className="text-success/60">{completionTokens}</span>
+          <span className="text-base-content/20"> tok</span>
+        </span>
+
+        {typeof item.durationMs === "number" && (
+          <span className="shrink-0 text-[10px] tabular-nums text-base-content/30">{item.durationMs}ms</span>
+        )}
+
+        {typeof item.upstreamStatusCode === "number" && (
+          <Badge variant={item.upstreamStatusCode < 400 ? "success" : "error"}>
+            {item.upstreamStatusCode}
+          </Badge>
+        )}
+
+        {/* prompt preview */}
+        <span className="min-w-0 flex-1 truncate text-xs text-base-content/50">{promptPreview}</span>
+
+        <span className="shrink-0 text-[10px] text-base-content/25" title={formatTimeFull(item.createdAt)}>
+          {formatTime(item.createdAt)}
+        </span>
+      </button>
+
+      {/* expanded detail (inline, no modal) */}
+      {expanded && (
+        <div className="border-t border-base-content/5">
+          {/* meta */}
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-2 text-[11px] text-base-content/40">
+            <span>ID: <span className="mono">{item.id}</span></span>
+            <span>创建: {formatTimeFull(item.createdAt)}</span>
+            {item.completedAt && <span>完成: {formatTimeFull(item.completedAt)} ({formatRelative(item.completedAt)})</span>}
+            <span>Prompt Tokens: <span className="text-info">{item.promptTokens}</span></span>
+            <span>Completion Tokens: <span className="text-success">{completionTokens}</span></span>
+            <span>Total: <span className="font-semibold text-base-content/60">{totalTokens}</span></span>
+            {typeof item.durationMs === "number" && <span>耗时: {item.durationMs}ms</span>}
+            {item.upstreamUrl && (
+              <span className="flex items-center gap-1">
+                <ExternalLink size={10} />
+                <span className="mono">{item.upstreamUrl}</span>
+              </span>
+            )}
+          </div>
+          {item.errorMessage && (
+            <div className="mx-4 mb-2 rounded bg-error/10 px-3 py-1.5 text-xs text-error">{item.errorMessage}</div>
+          )}
+
+          {/* prompt + response side by side */}
+          <div className="grid gap-0 lg:grid-cols-2">
+            <div className="border-t border-base-content/5 p-4 lg:border-r">
+              <div className="mb-2 flex items-center justify-between">
+                <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-base-content/40">
+                  <Send size={11} /> Prompt
+                </span>
+                <CopyButton text={item.prompt} />
+              </div>
+              <div className="max-h-64 overflow-auto rounded-lg bg-base-200/50 p-3 text-sm leading-relaxed text-base-content/70 whitespace-pre-wrap">
+                {item.prompt || "(空)"}
+              </div>
+            </div>
+
+            <div className="border-t border-base-content/5 p-4">
+              <div className="mb-2 flex items-center justify-between">
+                <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-base-content/40">
+                  <Zap size={11} /> Response
+                </span>
+                <CopyButton text={responseText || safeStringify(item.responseBody ?? "")} />
+              </div>
+              {item.responseStatus === "pending" ? (
+                <p className="flex items-center gap-2 text-sm text-base-content/40">
+                  <Loader2 size={14} className="animate-spin" /> 等待响应…
+                </p>
+              ) : (
+                <div className="max-h-64 overflow-auto">
+                  <MarkdownSurface markdown={responseMd} />
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* raw JSON toggle */}
+          <details className="border-t border-base-content/5">
+            <summary className="cursor-pointer px-4 py-2 text-[11px] text-base-content/30 hover:text-base-content/50 select-none">
+              查看原始请求/响应 JSON
+            </summary>
+            <div className="grid gap-0 lg:grid-cols-2">
+              <div className="p-4 lg:border-r border-base-content/5">
+                <div className="mb-1 text-[10px] uppercase tracking-wider text-base-content/30">Request Body</div>
+                <pre className="max-h-48 overflow-auto rounded-lg bg-base-300 p-3 text-[11px] text-base-content/60 mono">{safeStringify(item.requestBody)}</pre>
+              </div>
+              <div className="p-4">
+                <div className="mb-1 text-[10px] uppercase tracking-wider text-base-content/30">Response Body</div>
+                <pre className="max-h-48 overflow-auto rounded-lg bg-base-300 p-3 text-[11px] text-base-content/60 mono">{safeStringify(item.responseBody)}</pre>
+              </div>
+            </div>
+          </details>
+        </div>
+      )}
+    </div>
+  );
+});
+
+/* ========== Settings Drawer (right slide-in) ========== */
+
+const SettingsDrawer = memo(function SettingsDrawer({
+  open, configForm, models, saving, isDirty, saveHint, lastSavedAt, saveError,
+  syncingModels, syncSuccess, syncError, testingUpstream, testResult, testError,
+  onClose, onConfigChange, onApiTypeChange, onRefreshModels, onRunTest
+}: {
   open: boolean;
   configForm: ProxyConfig;
-  modeDescription: string;
   models: ModelRecord[];
   saving: boolean;
   isDirty: boolean;
@@ -96,353 +404,189 @@ type SettingsModalProps = {
   onApiTypeChange: (apiType: ApiType) => void;
   onRefreshModels: () => void;
   onRunTest: () => void;
-};
-
-const PAGE_SIZE = 20;
-const apiTypeToPath = (apiType: ApiType) => (apiType === "responses" ? "/v1/responses" : "/v1/chat/completions");
-const pathToApiType = (path: string): ApiType => (path.includes("/responses") ? "responses" : "chat_completions");
-
-const normalizeConfig = (value?: Partial<ProxyConfig>): ProxyConfig => {
-  const rawPath = value?.path ?? "/v1/chat/completions";
-  const apiType = value?.apiType ?? pathToApiType(rawPath);
-  return {
-    mode: value?.mode ?? "capture_only",
-    apiType,
-    baseUrl: value?.baseUrl ?? "https://api.openai.com/v1",
-    path: value?.path ?? apiTypeToPath(apiType),
-    apiKey: value?.apiKey ?? "",
-    modelOverride: value?.modelOverride ?? ""
-  };
-};
-
-const defaultConfig: ProxyConfig = normalizeConfig();
-
-const emptyState: DashboardState = {
-  items: [],
-  stats: {
-    totalRequests: 0,
-    totalPromptTokens: 0,
-    totalForwarded: 0,
-    totalCaptureOnly: 0
-  },
-  config: defaultConfig,
-  models: []
-};
-
-const formatTime = (iso: string) =>
-  new Date(iso).toLocaleString("zh-CN", {
-    hour12: false,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit"
-  });
-
-const safeStringify = (value: unknown) => {
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
-};
-
-const getResponseText = (value: unknown): string => {
-  if (!value || typeof value !== "object") {
-    return "";
-  }
-  const asRecord = value as {
-    choices?: Array<{ message?: { content?: string } }>;
-    assistant?: string;
-    content?: string;
-    output_text?: string;
-  };
-  if (typeof asRecord.assistant === "string") {
-    return asRecord.assistant;
-  }
-  if (typeof asRecord.output_text === "string") {
-    return asRecord.output_text;
-  }
-  if (typeof asRecord.content === "string") {
-    return asRecord.content;
-  }
-  const messageContent = asRecord.choices?.[0]?.message?.content;
-  return typeof messageContent === "string" ? messageContent : "";
-};
-
-const buildResponseMarkdown = (value: unknown) => {
-  const text = getResponseText(value);
-  if (text.trim()) {
-    return text;
-  }
-  return `\`\`\`json\n${safeStringify(value ?? {})}\n\`\`\``;
-};
-
-const toPreviewText = (markdown: string, limit = 220) => {
-  const compact = markdown.replace(/```[\s\S]*?```/g, "[代码块]").replace(/[#>*_`\-]/g, " ").replace(/\s+/g, " ").trim();
-  if (compact.length <= limit) {
-    return compact;
-  }
-  return `${compact.slice(0, limit)}...`;
-};
-
-const isLongMarkdown = (value: string) => value.length > 900 || value.split("\n").length > 24;
-
-const MarkdownSurface = ({ markdown }: { markdown: string }) => (
-  <div className="markdown-body markdown-surface">
-    <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
-      {markdown}
-    </ReactMarkdown>
-  </div>
-);
-
-const ExchangeCard = memo(function ExchangeCard(props: {
-  item: ExchangeRecord;
-  serial: number;
-  onOpenDetail: (title: string, markdown: string) => void;
 }) {
-  const { item, serial, onOpenDetail } = props;
-  const promptMd = item.prompt || "_空_";
-  const responseMd = buildResponseMarkdown(item.responseBody);
-  const promptLong = isLongMarkdown(promptMd);
-  const responseLong = isLongMarkdown(responseMd);
-
-  return (
-    <article className="rounded-box border border-base-300 bg-base-100 p-3">
-      <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs text-base-content/70">
-        <span className="badge badge-outline">#{serial}</span>
-        <div className="flex flex-wrap items-center gap-2">
-          <span className={`badge ${item.mode === "forward" ? "badge-info" : "badge-neutral"}`}>{item.mode}</span>
-          <span
-            className={`badge ${
-              item.responseStatus === "success"
-                ? "badge-success"
-                : item.responseStatus === "error"
-                  ? "badge-error"
-                  : "badge-warning"
-            }`}
-          >
-            {item.responseStatus}
-          </span>
-          <span className="badge badge-ghost">{item.promptTokens} tokens</span>
-          <span>{formatTime(item.createdAt)}</span>
-        </div>
-      </div>
-
-      <p className="mb-1 text-xs text-base-content/60">
-        model: {item.model}
-        {typeof item.durationMs === "number" ? ` · ${item.durationMs}ms` : ""}
-        {typeof item.upstreamStatusCode === "number" ? ` · upstream ${item.upstreamStatusCode}` : ""}
-      </p>
-      {item.upstreamUrl ? <p className="mb-2 text-xs text-base-content/60">upstream: {item.upstreamUrl}</p> : null}
-      {item.errorMessage ? <p className="mb-2 text-sm text-error">{item.errorMessage}</p> : null}
-
-      <div className="grid gap-3 lg:grid-cols-2">
-        <section className="rounded-box border border-base-300 bg-base-200/50 p-3">
-          <div className="mb-2 flex items-center justify-between gap-2">
-            <h3 className="text-sm font-semibold">请求 Prompt</h3>
-            <button className="btn btn-xs btn-outline" onClick={() => onOpenDetail(`Prompt · ${item.id}`, promptMd)}>
-              查看
-            </button>
-          </div>
-          <p className="line-clamp-5 text-sm text-base-content/80">{toPreviewText(promptMd)}</p>
-          {promptLong ? <span className="mt-2 inline-block text-xs text-base-content/60">长内容，建议弹窗查看</span> : null}
-        </section>
-
-        <section className="rounded-box border border-base-300 bg-base-200/50 p-3">
-          <div className="mb-2 flex items-center justify-between gap-2">
-            <h3 className="text-sm font-semibold">响应</h3>
-            <button className="btn btn-xs btn-outline" onClick={() => onOpenDetail(`Response · ${item.id}`, responseMd)}>
-              查看
-            </button>
-          </div>
-          {item.responseStatus === "pending" ? (
-            <p className="text-sm text-base-content/70">等待响应中...</p>
-          ) : (
-            <>
-              <p className="line-clamp-5 text-sm text-base-content/80">{toPreviewText(responseMd)}</p>
-              {responseLong ? <span className="mt-2 inline-block text-xs text-base-content/60">长内容，建议弹窗查看</span> : null}
-            </>
-          )}
-        </section>
-      </div>
-    </article>
-  );
-});
-
-const SettingsModal = memo(function SettingsModal(props: SettingsModalProps) {
-  const {
-    open,
-    configForm,
-    modeDescription,
-    models,
-    saving,
-    isDirty,
-    saveHint,
-    lastSavedAt,
-    saveError,
-    syncingModels,
-    syncSuccess,
-    syncError,
-    testingUpstream,
-    testResult,
-    testError,
-    onClose,
-    onConfigChange,
-    onApiTypeChange,
-    onRefreshModels,
-    onRunTest
-  } = props;
-
   const [modelQuery, setModelQuery] = useState("");
 
-  useEffect(() => {
-    if (!open) {
-      setModelQuery("");
-    }
-  }, [open]);
+  useEffect(() => { if (!open) setModelQuery(""); }, [open]);
 
   const filteredModels = useMemo(() => {
-    const query = modelQuery.trim().toLowerCase();
-    const source = query ? models.filter((item) => item.id.toLowerCase().includes(query)) : models;
-    return source.slice(0, 60);
+    const q = modelQuery.trim().toLowerCase();
+    const src = q ? models.filter((m) => m.id.toLowerCase().includes(q)) : models;
+    return src.slice(0, 80);
   }, [models, modelQuery]);
 
-  if (!open) {
-    return null;
-  }
-
   return (
-    <dialog className="modal" open={open}>
-      <div className="modal-box max-w-3xl">
-        <div className="mb-3 flex items-center justify-between">
-          <h3 className="text-lg font-semibold">设置</h3>
-          <button className="btn btn-sm btn-ghost" onClick={onClose} type="button">
-            关闭
+    <>
+      {/* backdrop */}
+      <div
+        className={`fixed inset-0 z-40 bg-black/40 transition-opacity duration-200 ${open ? "opacity-100" : "pointer-events-none opacity-0"}`}
+        onClick={onClose}
+      />
+
+      {/* drawer */}
+      <aside
+        className={`fixed right-0 top-0 z-50 flex h-full w-full max-w-md flex-col border-l border-base-content/10 bg-base-200 shadow-2xl transition-transform duration-200 ${
+          open ? "translate-x-0" : "translate-x-full"
+        }`}
+      >
+        {/* header */}
+        <div className="flex shrink-0 items-center justify-between border-b border-base-content/5 px-4 py-3">
+          <h3 className="flex items-center gap-2 text-sm font-bold">
+            <Settings2 size={16} /> 配置
+          </h3>
+          <button className="btn btn-ghost btn-sm btn-circle h-7 w-7 min-h-0" onClick={onClose} type="button">
+            <X size={16} />
           </button>
         </div>
 
-        <div className="space-y-3">
-          <label className="form-control">
-            <span className="label-text mb-1 text-sm">模式</span>
-            <div role="tablist" className="tabs tabs-boxed grid w-full grid-cols-2">
-              <button
-                role="tab"
-                type="button"
-                className={`tab ${configForm.mode === "capture_only" ? "tab-active" : ""}`}
-                onClick={() => onConfigChange("mode", "capture_only")}
-              >
-                仅抓请求
-              </button>
-              <button
-                role="tab"
-                type="button"
-                className={`tab ${configForm.mode === "forward" ? "tab-active" : ""}`}
-                onClick={() => onConfigChange("mode", "forward")}
-              >
-                抓取并转发
-              </button>
+        {/* scrollable body */}
+        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          {/* mode */}
+          <div>
+            <label className="mb-1.5 block text-[10px] font-semibold uppercase tracking-wider text-base-content/40">模式</label>
+            <div className="grid grid-cols-2 gap-2">
+              {(["capture_only", "forward"] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  className={`rounded-lg border px-3 py-2 text-xs font-medium transition-all ${
+                    configForm.mode === m
+                      ? "border-primary bg-primary/10 text-primary"
+                      : "border-base-content/10 text-base-content/50 hover:border-base-content/20"
+                  }`}
+                  onClick={() => onConfigChange("mode", m)}
+                >
+                  {m === "capture_only" ? (
+                    <span className="flex items-center justify-center gap-1.5"><Shield size={12} /> 仅捕获</span>
+                  ) : (
+                    <span className="flex items-center justify-center gap-1.5"><ArrowUpDown size={12} /> 转发</span>
+                  )}
+                </button>
+              ))}
             </div>
-            <span className="mt-1 text-xs text-base-content/70">{modeDescription}</span>
-          </label>
+          </div>
 
-          <label className="form-control">
-            <span className="label-text mb-1 text-sm">API Type</span>
-            <select className="select select-bordered" value={configForm.apiType} onChange={(event) => onApiTypeChange(event.target.value as ApiType)}>
-              <option value="chat_completions">Chat Completions</option>
-              <option value="responses">Responses</option>
-            </select>
-          </label>
+          {/* api type + base url in one row */}
+          <div className="grid grid-cols-3 gap-2">
+            <div>
+              <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-base-content/40">API</label>
+              <select
+                className="select select-bordered select-sm w-full bg-base-100 text-xs"
+                value={configForm.apiType}
+                onChange={(e) => onApiTypeChange(e.target.value as ApiType)}
+              >
+                <option value="chat_completions">Chat</option>
+                <option value="responses">Responses</option>
+              </select>
+            </div>
+            <div className="col-span-2">
+              <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-base-content/40">Base URL</label>
+              <input
+                className="input input-bordered input-sm w-full bg-base-100 font-mono text-xs"
+                value={configForm.baseUrl}
+                onChange={(e) => onConfigChange("baseUrl", e.target.value)}
+                placeholder="https://api.openai.com/v1"
+              />
+            </div>
+          </div>
 
-          <label className="form-control">
-            <span className="label-text mb-1 text-sm">Base URL</span>
+          {/* api key */}
+          <div>
+            <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-base-content/40">API Key</label>
             <input
-              className="input input-bordered"
-              value={configForm.baseUrl}
-              onChange={(event) => onConfigChange("baseUrl", event.target.value)}
-              placeholder="https://api.openai.com/v1"
-            />
-            <span className="mt-1 text-xs text-base-content/70">建议填写到 /v1 结尾</span>
-          </label>
-
-          <label className="form-control">
-            <span className="label-text mb-1 text-sm">API Key（可选）</span>
-            <input
-              className="input input-bordered"
+              className="input input-bordered input-sm w-full bg-base-100 font-mono text-xs"
               type="password"
               value={configForm.apiKey}
-              onChange={(event) => onConfigChange("apiKey", event.target.value)}
+              onChange={(e) => onConfigChange("apiKey", e.target.value)}
               placeholder="sk-..."
             />
-          </label>
+          </div>
 
-          <label className="form-control">
-            <span className="label-text mb-1 text-sm">模型覆盖（可选）</span>
+          {/* model override */}
+          <div>
+            <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-base-content/40">模型覆盖</label>
             <input
-              className="input input-bordered"
+              className="input input-bordered input-sm w-full bg-base-100 font-mono text-xs"
               value={configForm.modelOverride}
-              onChange={(event) => onConfigChange("modelOverride", event.target.value)}
-              placeholder="输入模型名或从下方列表选择"
+              onChange={(e) => onConfigChange("modelOverride", e.target.value)}
+              placeholder="留空则使用请求中的模型"
             />
-            <input
-              className="input input-bordered mt-2"
-              value={modelQuery}
-              onChange={(event) => setModelQuery(event.target.value)}
-              placeholder="筛选模型（支持模糊匹配）"
-            />
-            <div className="mt-2 max-h-32 overflow-auto rounded-box border border-base-300 bg-base-100 p-2">
+            <div className="mt-1.5 flex items-center gap-1.5">
+              <input
+                className="input input-bordered input-sm flex-1 bg-base-100 text-xs"
+                value={modelQuery}
+                onChange={(e) => setModelQuery(e.target.value)}
+                placeholder="🔍 搜索模型…"
+              />
+              <span className="shrink-0 text-[10px] text-base-content/30">{models.length}</span>
+            </div>
+            <div className="mt-1.5 max-h-24 overflow-auto rounded-lg border border-base-content/5 bg-base-100 p-1.5">
               {filteredModels.length === 0 ? (
-                <p className="text-xs text-base-content/60">无匹配模型</p>
+                <p className="py-1 text-center text-[10px] text-base-content/30">无模型</p>
               ) : (
-                <div className="flex flex-wrap gap-2">
-                  {filteredModels.map((model) => (
-                    <button className="btn btn-xs btn-outline" key={model.id} onClick={() => onConfigChange("modelOverride", model.id)} type="button">
-                      {model.id}
+                <div className="flex flex-wrap gap-1">
+                  {filteredModels.map((m) => (
+                    <button
+                      key={m.id}
+                      type="button"
+                      className={`rounded border px-1.5 py-0.5 font-mono text-[10px] transition-colors ${
+                        configForm.modelOverride === m.id
+                          ? "border-primary bg-primary/15 text-primary"
+                          : "border-base-content/10 text-base-content/50 hover:border-primary/30 hover:text-primary"
+                      }`}
+                      onClick={() => onConfigChange("modelOverride", m.id)}
+                    >
+                      {m.id}
                     </button>
                   ))}
                 </div>
               )}
             </div>
-          </label>
+          </div>
 
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            <button className={`btn btn-outline ${syncingModels ? "btn-disabled" : ""}`} onClick={onRefreshModels} disabled={syncingModels} type="button">
-              {syncingModels ? "同步中..." : "手动同步上游模型"}
+          {/* actions */}
+          <div className="grid grid-cols-2 gap-2">
+            <button className="btn btn-outline btn-sm gap-1.5 text-xs" onClick={onRefreshModels} disabled={syncingModels} type="button">
+              <RefreshCw size={12} className={syncingModels ? "animate-spin" : ""} />
+              {syncingModels ? "同步…" : "同步模型"}
             </button>
-            <button className={`btn btn-outline ${testingUpstream ? "btn-disabled" : ""}`} onClick={onRunTest} disabled={testingUpstream} type="button">
-              {testingUpstream ? "测试中..." : "测试上游模型"}
+            <button className="btn btn-outline btn-sm gap-1.5 text-xs" onClick={onRunTest} disabled={testingUpstream} type="button">
+              <Activity size={12} className={testingUpstream ? "animate-pulse" : ""} />
+              {testingUpstream ? "测试…" : "测试连接"}
             </button>
           </div>
 
-          <div className="min-h-5 text-xs text-base-content/70">
-            {saving ? "自动保存中..." : saveHint ? saveHint : "配置自动保存已开启"}
-            {!saving && !isDirty && lastSavedAt ? ` · ${formatTime(lastSavedAt)}` : ""}
-          </div>
-          {syncSuccess ? <p className="text-xs text-success">{syncSuccess}</p> : null}
-          {syncError ? <p className="text-sm text-error">{syncError}</p> : null}
-          {testError ? <p className="text-sm text-error">{testError}</p> : null}
-          {testResult ? (
-            <div className={`rounded-box border p-3 text-xs ${testResult.ok ? "border-success/40 bg-success/5" : "border-error/40 bg-error/5"}`}>
-              <p className="font-semibold">
-                测试结果: {testResult.ok ? "可用" : "失败"} · HTTP {testResult.upstreamStatusCode} · {testResult.durationMs}ms
-              </p>
-              <p className="mt-1 break-all text-base-content/70">{testResult.upstreamUrl}</p>
-              <p className="mt-1 text-base-content/80">model: {testResult.model}</p>
-              {testResult.preview ? <p className="mt-1 whitespace-pre-wrap text-base-content/80">{testResult.preview}</p> : null}
+          {/* feedback */}
+          <div className="space-y-1.5 text-[11px]">
+            <div className="flex items-center gap-1.5 text-base-content/35">
+              {saving ? <><Loader2 size={10} className="animate-spin" /> 保存中…</>
+                : saveHint ? <><CheckCircle2 size={10} className="text-success" /> {saveHint}</>
+                : "自动保存"}
+              {!saving && !isDirty && lastSavedAt && <span>· {formatTimeFull(lastSavedAt)}</span>}
             </div>
-          ) : null}
-          {saveError ? <p className="text-sm text-error">{saveError}</p> : null}
+            {syncSuccess && <p className="rounded bg-success/10 px-2 py-1 text-success">{syncSuccess}</p>}
+            {syncError && <p className="rounded bg-error/10 px-2 py-1 text-error">{syncError}</p>}
+            {saveError && <p className="rounded bg-error/10 px-2 py-1 text-error">{saveError}</p>}
+            {testError && <p className="rounded bg-error/10 px-2 py-1 text-error">{testError}</p>}
+            {testResult && (
+              <div className={`rounded-lg border p-2.5 ${testResult.ok ? "border-success/20 bg-success/5" : "border-error/20 bg-error/5"}`}>
+                <p className="font-semibold">
+                  {testResult.ok ? <CheckCircle2 size={11} className="inline text-success" /> : <XCircle size={11} className="inline text-error" />}
+                  {" "}HTTP {testResult.upstreamStatusCode} · {testResult.durationMs}ms
+                </p>
+                <p className="mt-0.5 font-mono text-base-content/40 text-[10px] break-all">{testResult.upstreamUrl}</p>
+                <p className="text-base-content/50">model: {testResult.model}</p>
+                {testResult.preview && <p className="mt-1 whitespace-pre-wrap text-base-content/60">{testResult.preview}</p>}
+              </div>
+            )}
+          </div>
         </div>
-      </div>
-      <form method="dialog" className="modal-backdrop">
-        <button onClick={onClose} type="button" aria-label="关闭设置">
-          关闭
-        </button>
-      </form>
-    </dialog>
+      </aside>
+    </>
   );
 });
+
+/* ========== App ========== */
 
 export const App = () => {
   const [dashboard, setDashboard] = useState<DashboardState>(emptyState);
@@ -465,304 +609,278 @@ export const App = () => {
   const [testResult, setTestResult] = useState<UpstreamTestResult | null>(null);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [detailModal, setDetailModal] = useState<DetailModalState | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"all" | "success" | "error" | "pending">("all");
 
   const dirtyRef = useRef(false);
   const lastSavedSignatureRef = useRef(JSON.stringify(defaultConfig));
 
+  /* SSE */
   useEffect(() => {
-    const eventSource = new EventSource("/events/prompts");
-
-    eventSource.onopen = () => setConnected(true);
-    eventSource.onerror = () => setConnected(false);
-    eventSource.onmessage = (event) => {
+    const es = new EventSource("/events/prompts");
+    es.onopen = () => setConnected(true);
+    es.onerror = () => setConnected(false);
+    es.onmessage = (ev) => {
       try {
-        const data = JSON.parse(event.data) as DashboardEvent;
-        const nextState = data.state ?? emptyState;
-        const normalizedConfig = normalizeConfig(nextState.config);
-        setDashboard({ ...nextState, config: normalizedConfig });
+        const data = JSON.parse(ev.data) as DashboardEvent;
+        const ns = data.state ?? emptyState;
+        const nc = normalizeConfig(ns.config);
+        setDashboard({ ...ns, config: nc });
         if (!dirtyRef.current) {
-          setConfigForm(normalizedConfig);
-          lastSavedSignatureRef.current = JSON.stringify(normalizedConfig);
+          setConfigForm(nc);
+          lastSavedSignatureRef.current = JSON.stringify(nc);
         }
-      } catch {
-        setConnected(false);
-      }
+      } catch { setConnected(false); }
     };
-
-    return () => {
-      eventSource.close();
-      setConnected(false);
-    };
+    return () => { es.close(); setConnected(false); };
   }, []);
 
-  useEffect(() => {
-    setVisibleCount((prev) => {
-      if (dashboard.items.length <= PAGE_SIZE) {
-        return dashboard.items.length;
-      }
-      return Math.max(Math.min(prev, dashboard.items.length), PAGE_SIZE);
-    });
-  }, [dashboard.items.length]);
+  /* filter + search */
+  const filteredItems = useMemo(() => {
+    let items = dashboard.items;
+    if (statusFilter !== "all") {
+      items = items.filter((i) => i.responseStatus === statusFilter);
+    }
+    const q = searchQuery.trim().toLowerCase();
+    if (q) {
+      items = items.filter((i) =>
+        i.prompt.toLowerCase().includes(q) ||
+        i.model.toLowerCase().includes(q) ||
+        i.id.toLowerCase().includes(q) ||
+        (i.errorMessage ?? "").toLowerCase().includes(q) ||
+        getResponseText(i.responseBody).toLowerCase().includes(q)
+      );
+    }
+    return items;
+  }, [dashboard.items, statusFilter, searchQuery]);
 
-  const statusLabel = useMemo(() => (connected ? "SSE 已连接" : "SSE 断开"), [connected]);
-  const modeDescription = useMemo(
-    () =>
-      configForm.mode === "capture_only"
-        ? "仅抓取请求，返回本地假响应。"
-        : "抓取请求后转发上游并回传上游响应。",
-    [configForm.mode]
+  const visibleItems = useMemo(() => filteredItems.slice(0, visibleCount), [filteredItems, visibleCount]);
+
+  useEffect(() => {
+    setVisibleCount(PAGE_SIZE);
+  }, [searchQuery, statusFilter]);
+
+  /* compute total completion tokens */
+  const totalCompletionTokens = useMemo(
+    () => dashboard.items.reduce((sum, i) => sum + getCompletionTokens(i.responseBody), 0),
+    [dashboard.items]
   );
 
-  const readErrorMessage = useCallback(async (response: Response) => {
-    const raw = await response.text();
-    if (!raw) {
-      return "请求失败";
-    }
+  /* helpers */
+  const readErrorMessage = useCallback(async (r: Response) => {
+    const raw = await r.text();
+    if (!raw) return "请求失败";
     try {
-      const payload = JSON.parse(raw) as { error?: { message?: string; detail?: string } };
-      if (payload?.error?.detail) {
-        return `${payload.error.message ?? "请求失败"}: ${payload.error.detail}`;
-      }
-      if (payload?.error?.message) {
-        return payload.error.message;
-      }
+      const p = JSON.parse(raw) as { error?: { message?: string; detail?: string } };
+      if (p?.error?.detail) return `${p.error.message ?? "请求失败"}: ${p.error.detail}`;
+      if (p?.error?.message) return p.error.message;
       return raw;
-    } catch {
-      return raw;
-    }
+    } catch { return raw; }
   }, []);
 
   const markDirty = useCallback(() => {
     dirtyRef.current = true;
     setIsDirty(true);
     setSaveError("");
-    setSaveHint("已修改，稍后自动保存...");
+    setSaveHint("已修改…");
   }, []);
 
-  const onConfigChange = useCallback(
-    <K extends keyof ProxyConfig>(key: K, value: ProxyConfig[K]) => {
-      setConfigForm((prev) => ({ ...prev, [key]: value }));
-      markDirty();
-    },
-    [markDirty]
-  );
+  const onConfigChange = useCallback(<K extends keyof ProxyConfig>(key: K, value: ProxyConfig[K]) => {
+    setConfigForm((p) => ({ ...p, [key]: value }));
+    markDirty();
+  }, [markDirty]);
 
-  const onApiTypeChange = useCallback(
-    (apiType: ApiType) => {
-      setConfigForm((prev) => ({
-        ...prev,
-        apiType,
-        path: apiTypeToPath(apiType)
-      }));
-      markDirty();
-    },
-    [markDirty]
-  );
+  const onApiTypeChange = useCallback((apiType: ApiType) => {
+    setConfigForm((p) => ({ ...p, apiType, path: apiTypeToPath(apiType) }));
+    markDirty();
+  }, [markDirty]);
 
-  const saveConfig = useCallback(
-    async (nextConfig: ProxyConfig) => {
-      const nextSignature = JSON.stringify(nextConfig);
-      if (nextSignature === lastSavedSignatureRef.current) {
-        dirtyRef.current = false;
-        setIsDirty(false);
-        setSaveHint("已自动保存");
-        return true;
-      }
-
-      setSaving(true);
-      setSaveError("");
-      try {
-        const response = await fetch("/proxy/config", {
-          method: "PUT",
-          headers: {
-            "content-type": "application/json"
-          },
-          body: JSON.stringify(nextConfig)
-        });
-        if (!response.ok) {
-          throw new Error(await readErrorMessage(response));
-        }
-        const updated = normalizeConfig((await response.json()) as ProxyConfig);
-        setConfigForm(updated);
-        setDashboard((prev) => ({ ...prev, config: updated }));
-        lastSavedSignatureRef.current = JSON.stringify(updated);
-        dirtyRef.current = false;
-        setIsDirty(false);
-        setLastSavedAt(new Date().toISOString());
-        setSaveHint("已自动保存");
-        return true;
-      } catch (error) {
-        setSaveError(error instanceof Error ? error.message : "保存失败");
-        setSaveHint("");
-        return false;
-      } finally {
-        setSaving(false);
-      }
-    },
-    [readErrorMessage]
-  );
+  const saveConfig = useCallback(async (nc: ProxyConfig) => {
+    const sig = JSON.stringify(nc);
+    if (sig === lastSavedSignatureRef.current) {
+      dirtyRef.current = false; setIsDirty(false); setSaveHint("已保存"); return true;
+    }
+    setSaving(true); setSaveError("");
+    try {
+      const r = await fetch("/proxy/config", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(nc) });
+      if (!r.ok) throw new Error(await readErrorMessage(r));
+      const updated = normalizeConfig((await r.json()) as ProxyConfig);
+      setConfigForm(updated);
+      setDashboard((p) => ({ ...p, config: updated }));
+      lastSavedSignatureRef.current = JSON.stringify(updated);
+      dirtyRef.current = false; setIsDirty(false);
+      setLastSavedAt(new Date().toISOString());
+      setSaveHint("已保存");
+      return true;
+    } catch (e) { setSaveError(e instanceof Error ? e.message : "保存失败"); setSaveHint(""); return false; }
+    finally { setSaving(false); }
+  }, [readErrorMessage]);
 
   useEffect(() => {
-    if (!isDirty) {
-      return;
-    }
-    const timer = window.setTimeout(() => {
-      void saveConfig(configForm);
-    }, 1000);
-
-    return () => {
-      window.clearTimeout(timer);
-    };
+    if (!isDirty) return;
+    const t = window.setTimeout(() => void saveConfig(configForm), 800);
+    return () => window.clearTimeout(t);
   }, [configForm, isDirty, saveConfig]);
 
   const refreshUpstreamModels = useCallback(async () => {
-    setSyncingModels(true);
-    setSyncError("");
-    setSyncSuccess("");
-
-    if (dirtyRef.current) {
-      const saved = await saveConfig(configForm);
-      if (!saved) {
-        setSyncingModels(false);
-        return;
-      }
-    }
-
+    setSyncingModels(true); setSyncError(""); setSyncSuccess("");
+    if (dirtyRef.current) { if (!(await saveConfig(configForm))) { setSyncingModels(false); return; } }
     try {
-      const response = await fetch("/proxy/models/refresh", { method: "POST" });
-      if (!response.ok) {
-        throw new Error(await readErrorMessage(response));
-      }
-      const payload = (await response.json()) as { data?: ModelRecord[] };
-      const models = payload.data ?? [];
-      setDashboard((prev) => ({ ...prev, models }));
-      setSyncSuccess(`已同步 ${models.length} 个模型`);
-      if (configForm.modelOverride && !models.some((model) => model.id === configForm.modelOverride)) {
-        onConfigChange("modelOverride", "");
-      }
-    } catch (error) {
-      setSyncError(error instanceof Error ? error.message : "同步失败");
-    } finally {
-      setSyncingModels(false);
-    }
+      const r = await fetch("/proxy/models/refresh", { method: "POST" });
+      if (!r.ok) throw new Error(await readErrorMessage(r));
+      const payload = (await r.json()) as { data?: ModelRecord[] };
+      const m = payload.data ?? [];
+      setDashboard((p) => ({ ...p, models: m }));
+      setSyncSuccess(`已同步 ${m.length} 个模型`);
+      if (configForm.modelOverride && !m.some((x) => x.id === configForm.modelOverride)) onConfigChange("modelOverride", "");
+    } catch (e) { setSyncError(e instanceof Error ? e.message : "同步失败"); }
+    finally { setSyncingModels(false); }
   }, [configForm, onConfigChange, readErrorMessage, saveConfig]);
 
   const runUpstreamTest = useCallback(async () => {
-    setTestingUpstream(true);
-    setTestError("");
-    setTestResult(null);
-
-    if (dirtyRef.current) {
-      const saved = await saveConfig(configForm);
-      if (!saved) {
-        setTestingUpstream(false);
-        return;
-      }
-    }
-
+    setTestingUpstream(true); setTestError(""); setTestResult(null);
+    if (dirtyRef.current) { if (!(await saveConfig(configForm))) { setTestingUpstream(false); return; } }
     try {
-      const response = await fetch("/proxy/test", { method: "POST" });
-      if (!response.ok) {
-        throw new Error(await readErrorMessage(response));
-      }
-      setTestResult((await response.json()) as UpstreamTestResult);
-    } catch (error) {
-      setTestError(error instanceof Error ? error.message : "测试失败");
-    } finally {
-      setTestingUpstream(false);
-    }
+      const r = await fetch("/proxy/test", { method: "POST" });
+      if (!r.ok) throw new Error(await readErrorMessage(r));
+      setTestResult((await r.json()) as UpstreamTestResult);
+    } catch (e) { setTestError(e instanceof Error ? e.message : "测试失败"); }
+    finally { setTestingUpstream(false); }
   }, [configForm, readErrorMessage, saveConfig]);
 
-  const openDetail = useCallback((title: string, markdown: string) => {
-    setDetailModal({
-      title,
-      markdown
-    });
-  }, []);
+  const onListScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    const t = e.currentTarget;
+    if (t.scrollTop + t.clientHeight < t.scrollHeight - 200) return;
+    setVisibleCount((p) => Math.min(p + PAGE_SIZE, filteredItems.length));
+  }, [filteredItems.length]);
 
-  const visibleItems = useMemo(() => dashboard.items.slice(0, visibleCount), [dashboard.items, visibleCount]);
-
-  const onListScroll = useCallback(
-    (event: React.UIEvent<HTMLDivElement>) => {
-      const target = event.currentTarget;
-      if (target.scrollTop + target.clientHeight < target.scrollHeight - 220) {
-        return;
-      }
-      setVisibleCount((prev) => Math.min(prev + PAGE_SIZE, dashboard.items.length));
-    },
-    [dashboard.items.length]
-  );
+  const { stats } = dashboard;
 
   return (
-    <main className="mx-auto max-w-[1880px] space-y-4 px-4 py-5 md:px-6">
-      <header className="card border border-base-300 bg-base-100 shadow-sm">
-        <div className="card-body gap-3 p-5">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <h1 className="card-title text-2xl">Fake OpenAI Model Gateway</h1>
-            <button className="btn btn-primary btn-sm" onClick={() => setSettingsOpen(true)}>
-              打开设置
-            </button>
+    <div className="flex h-screen flex-col overflow-hidden">
+      {/* ── top bar ── */}
+      <header className="z-30 flex shrink-0 items-center justify-between border-b border-base-content/5 bg-base-300 px-4 py-2">
+        <div className="flex items-center gap-3">
+          <div className="flex h-7 w-7 items-center justify-center rounded-md bg-primary/15 text-primary">
+            <Server size={15} />
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <span className={`badge ${dashboard.config.mode === "forward" ? "badge-info" : "badge-neutral"}`}>
-              {dashboard.config.mode === "capture_only" ? "仅抓请求" : "抓取并转发"}
-            </span>
-            <span className={`badge ${connected ? "badge-success" : "badge-error"}`}>{statusLabel}</span>
-            <span className="text-xs text-base-content/70">{modeDescription}</span>
+          <h1 className="text-sm font-bold">Fake Model Gateway</h1>
+
+          <div className="hidden items-center gap-2 sm:flex">
+            <Badge variant={dashboard.config.mode === "forward" ? "info" : "default"}>
+              {dashboard.config.mode === "forward" ? "Forward" : "Capture"}
+            </Badge>
+            <StatusDot ok={connected} label={connected ? "Live" : "Off"} />
           </div>
+        </div>
+
+        {/* mini stats in header */}
+        <div className="flex items-center gap-2">
+          <div className="hidden items-center gap-3 text-[10px] tabular-nums text-base-content/40 lg:flex">
+            <span title="总请求"><Activity size={10} className="inline" /> {stats.totalRequests}</span>
+            <span title="Prompt Tokens" className="text-info/60"><Send size={10} className="inline" /> {stats.totalPromptTokens.toLocaleString()}</span>
+            <span title="Completion Tokens" className="text-success/60"><Zap size={10} className="inline" /> {totalCompletionTokens.toLocaleString()}</span>
+            <span title="总 Tokens"><Coins size={10} className="inline" /> {(stats.totalPromptTokens + totalCompletionTokens).toLocaleString()}</span>
+          </div>
+          <button className="btn btn-primary btn-sm gap-1.5 h-7 min-h-0 text-xs" onClick={() => setSettingsOpen(true)}>
+            <Settings2 size={13} /> 配置
+          </button>
         </div>
       </header>
 
-      <section className="stats w-full border border-base-300 bg-base-100 shadow-sm">
-        <div className="stat">
-          <div className="stat-title">总请求数</div>
-          <div className="stat-value text-3xl">{dashboard.stats.totalRequests}</div>
-        </div>
-        <div className="stat">
-          <div className="stat-title">累计 Prompt Token</div>
-          <div className="stat-value text-3xl">{dashboard.stats.totalPromptTokens}</div>
-        </div>
-        <div className="stat">
-          <div className="stat-title">转发请求</div>
-          <div className="stat-value text-3xl">{dashboard.stats.totalForwarded}</div>
-        </div>
-        <div className="stat">
-          <div className="stat-title">仅抓请求</div>
-          <div className="stat-value text-3xl">{dashboard.stats.totalCaptureOnly}</div>
-        </div>
-      </section>
+      {/* ── stats row (mobile visible) ── */}
+      <div className="shrink-0 grid grid-cols-2 gap-2 border-b border-base-content/5 bg-base-300/50 px-4 py-2 sm:grid-cols-4 lg:grid-cols-6">
+        <StatMini icon={Activity} label="请求" value={stats.totalRequests} />
+        <StatMini icon={Send} label="入 Tokens" value={stats.totalPromptTokens.toLocaleString()} />
+        <StatMini icon={Zap} label="出 Tokens" value={totalCompletionTokens.toLocaleString()} />
+        <StatMini icon={Coins} label="总 Tokens" value={(stats.totalPromptTokens + totalCompletionTokens).toLocaleString()} />
+        <StatMini icon={ArrowUpDown} label="转发" value={stats.totalForwarded} />
+        <StatMini icon={Shield} label="捕获" value={stats.totalCaptureOnly} />
+      </div>
 
-      <section className="card border border-base-300 bg-base-100 shadow-sm">
-        <div className="card-body p-4">
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="card-title text-base">请求与响应记录</h2>
-            <span className="badge badge-ghost">
-              已加载 {visibleItems.length}/{dashboard.items.length}
-            </span>
-          </div>
-
-          <div className="max-h-[78vh] space-y-3 overflow-auto pr-1" onScroll={onListScroll}>
-            {visibleItems.length === 0 ? (
-              <p className="rounded-box border border-base-300 bg-base-200 p-4 text-sm text-base-content/70">暂无数据</p>
-            ) : (
-              visibleItems.map((item, idx) => <ExchangeCard item={item} serial={dashboard.items.length - idx} onOpenDetail={openDetail} key={item.id} />)
-            )}
-            {visibleItems.length < dashboard.items.length ? (
-              <div className="flex items-center justify-center py-2">
-                <button className="btn btn-sm btn-outline" onClick={() => setVisibleCount((prev) => Math.min(prev + PAGE_SIZE, dashboard.items.length))}>
-                  加载更多
-                </button>
-              </div>
-            ) : null}
-          </div>
+      {/* ── search + filter bar ── */}
+      <div className="shrink-0 flex items-center gap-2 border-b border-base-content/5 bg-base-300/30 px-4 py-2">
+        <div className="relative flex-1 max-w-md">
+          <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-base-content/30" />
+          <input
+            className="input input-bordered input-sm w-full bg-base-100 pl-8 text-xs"
+            placeholder="搜索 prompt, model, response …"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
+          {searchQuery && (
+            <button
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-base-content/30 hover:text-base-content/60"
+              onClick={() => setSearchQuery("")}
+              type="button"
+            >
+              <X size={12} />
+            </button>
+          )}
         </div>
-      </section>
+        <div className="flex items-center gap-1">
+          <Filter size={12} className="text-base-content/30" />
+          {(["all", "success", "error", "pending"] as const).map((s) => (
+            <button
+              key={s}
+              type="button"
+              className={`rounded border px-2 py-0.5 text-[10px] font-medium transition-colors ${
+                statusFilter === s
+                  ? "border-primary bg-primary/15 text-primary"
+                  : "border-base-content/10 text-base-content/40 hover:text-base-content/60"
+              }`}
+              onClick={() => setStatusFilter(s)}
+            >
+              {s === "all" ? "全部" : s}
+            </button>
+          ))}
+        </div>
+        <span className="text-[10px] text-base-content/25 tabular-nums ml-auto">
+          {filteredItems.length === dashboard.items.length
+            ? `${dashboard.items.length} 条`
+            : `${filteredItems.length} / ${dashboard.items.length}`}
+        </span>
+      </div>
 
-      <SettingsModal
+      {/* ── exchange list (fills remaining viewport) ── */}
+      <div className="flex-1 overflow-y-auto" onScroll={onListScroll}>
+        <div className="mx-auto max-w-[1600px] space-y-1 p-3">
+          {visibleItems.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-16 text-base-content/25">
+              <Radio size={28} className="mb-2 opacity-30" />
+              <p className="text-sm">{searchQuery || statusFilter !== "all" ? "无匹配记录" : "等待请求中…"}</p>
+            </div>
+          ) : (
+            visibleItems.map((item, idx) => {
+              const serial = statusFilter === "all" && !searchQuery
+                ? dashboard.items.length - idx
+                : filteredItems.length - idx;
+              return (
+                <ExchangeRow
+                  key={item.id}
+                  item={item}
+                  serial={serial}
+                  expanded={expandedId === item.id}
+                  onToggle={() => setExpandedId((p) => (p === item.id ? null : item.id))}
+                />
+              );
+            })
+          )}
+          {visibleItems.length < filteredItems.length && (
+            <div className="flex justify-center py-2">
+              <button className="btn btn-ghost btn-sm gap-1.5 text-xs" onClick={() => setVisibleCount((p) => Math.min(p + PAGE_SIZE, filteredItems.length))}>
+                <ChevronDown size={12} /> 加载更多 ({filteredItems.length - visibleItems.length})
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ── settings drawer ── */}
+      <SettingsDrawer
         open={settingsOpen}
         configForm={configForm}
-        modeDescription={modeDescription}
         models={dashboard.models}
         saving={saving}
         isDirty={isDirty}
@@ -781,27 +899,6 @@ export const App = () => {
         onRefreshModels={refreshUpstreamModels}
         onRunTest={runUpstreamTest}
       />
-
-      {detailModal ? (
-        <dialog className="modal" open>
-          <div className="modal-box max-w-5xl">
-            <div className="mb-3 flex items-center justify-between">
-              <h3 className="text-lg font-semibold">{detailModal.title}</h3>
-              <button className="btn btn-sm btn-ghost" onClick={() => setDetailModal(null)} type="button">
-                关闭
-              </button>
-            </div>
-            <div className="max-h-[72vh] overflow-auto pr-1">
-              <MarkdownSurface markdown={detailModal.markdown} />
-            </div>
-          </div>
-          <form method="dialog" className="modal-backdrop">
-            <button onClick={() => setDetailModal(null)} type="button" aria-label="关闭内容弹窗">
-              关闭
-            </button>
-          </form>
-        </dialog>
-      ) : null}
-    </main>
+    </div>
   );
 };

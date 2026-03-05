@@ -1,5 +1,7 @@
 import cors from "cors";
 import express from "express";
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { appRouter } from "./router.js";
 import {
@@ -8,7 +10,7 @@ import {
   createFakeCompletion,
   createFakeStreamText,
   proxyConfigSchema,
-  upstreamModelsResponseSchema
+  upstreamModelsResponseSchema,
 } from "./router.js";
 import {
   addExchange,
@@ -18,7 +20,7 @@ import {
   getProxyConfig,
   setModels,
   setProxyConfig,
-  subscribeExchangeUpdated
+  subscribeExchangeUpdated,
 } from "./state.js";
 
 const app = express();
@@ -26,6 +28,12 @@ const port = Number(process.env.PORT ?? 3000);
 
 app.use(cors());
 app.use(express.json());
+
+// --- Serve static web assets ---
+const webDistPath = resolve(import.meta.dirname ?? __dirname, "../../web/dist");
+if (existsSync(webDistPath)) {
+  app.use(express.static(webDistPath, { index: false }));
+}
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true });
@@ -35,7 +43,7 @@ app.get("/v1/models", (_req, res) => {
   const models = getModels();
   res.json({
     object: "list",
-    data: models
+    data: models,
   });
 });
 
@@ -73,8 +81,8 @@ app.put("/proxy/config", (req, res) => {
       error: {
         message: "Invalid proxy config",
         type: "invalid_request_error",
-        detail: parsed.error.issues.map((issue) => issue.message).join("; ")
-      }
+        detail: parsed.error.issues.map((issue) => issue.message).join("; "),
+      },
     });
     return;
   }
@@ -84,7 +92,7 @@ app.put("/proxy/config", (req, res) => {
     baseUrl: parsed.data.baseUrl.trim(),
     path: parsed.data.path.trim(),
     apiKey: parsed.data.apiKey.trim(),
-    modelOverride: parsed.data.modelOverride.trim()
+    modelOverride: parsed.data.modelOverride.trim(),
   };
   res.json(setProxyConfig(sanitized));
 });
@@ -92,7 +100,7 @@ app.put("/proxy/config", (req, res) => {
 app.get("/proxy/models", (_req, res) => {
   res.json({
     object: "list",
-    data: getModels()
+    data: getModels(),
   });
 });
 
@@ -173,8 +181,8 @@ app.post("/proxy/models/refresh", async (req, res) => {
       error: {
         message: "Invalid upstream baseUrl",
         type: "invalid_request_error",
-        detail: error instanceof Error ? error.message : "baseUrl is invalid"
-      }
+        detail: error instanceof Error ? error.message : "baseUrl is invalid",
+      },
     });
     return;
   }
@@ -183,8 +191,8 @@ app.post("/proxy/models/refresh", async (req, res) => {
     const upstreamResponse = await fetch(modelsUrl, {
       method: "GET",
       headers: {
-        ...(authorization ? { authorization } : {})
-      }
+        ...(authorization ? { authorization } : {}),
+      },
     });
     const text = await upstreamResponse.text();
     const payload = tryParseJson(text);
@@ -194,8 +202,8 @@ app.post("/proxy/models/refresh", async (req, res) => {
         error: {
           message: "Failed to fetch upstream models",
           type: "api_error",
-          detail: typeof payload === "string" ? payload : payload
-        }
+          detail: typeof payload === "string" ? payload : payload,
+        },
       });
       return;
     }
@@ -206,8 +214,8 @@ app.post("/proxy/models/refresh", async (req, res) => {
         error: {
           message: "Invalid upstream models response",
           type: "api_error",
-          detail: parsed.error.issues.map((issue) => issue.message).join("; ")
-        }
+          detail: parsed.error.issues.map((issue) => issue.message).join("; "),
+        },
       });
       return;
     }
@@ -217,21 +225,22 @@ app.post("/proxy/models/refresh", async (req, res) => {
         id: item.id,
         object: item.object ?? "model",
         created: item.created ?? Math.floor(Date.now() / 1000),
-        owned_by: item.owned_by ?? "upstream"
+        owned_by: item.owned_by ?? "upstream",
       }))
     );
 
     res.json({
       object: "list",
-      data: syncedModels
+      data: syncedModels,
     });
   } catch (error) {
     res.status(502).json({
       error: {
         message: "Failed to fetch upstream models",
         type: "api_error",
-        detail: error instanceof Error ? error.message : "unknown upstream error"
-      }
+        detail:
+          error instanceof Error ? error.message : "unknown upstream error",
+      },
     });
   }
 });
@@ -249,8 +258,8 @@ app.post("/proxy/test", async (req, res) => {
       error: {
         message: "Invalid upstream config",
         type: "invalid_request_error",
-        detail: error instanceof Error ? error.message : "invalid upstream url"
-      }
+        detail: error instanceof Error ? error.message : "invalid upstream url",
+      },
     });
     return;
   }
@@ -261,13 +270,13 @@ app.post("/proxy/test", async (req, res) => {
           model,
           input: "Ping. Reply with pong.",
           max_output_tokens: 32,
-          stream: false
+          stream: false,
         }
       : {
           model,
           messages: [{ role: "user", content: "Ping. Reply with pong." }],
           max_tokens: 32,
-          stream: false
+          stream: false,
         };
 
   const startedAt = Date.now();
@@ -277,9 +286,9 @@ app.post("/proxy/test", async (req, res) => {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        ...(authorization ? { authorization } : {})
+        ...(authorization ? { authorization } : {}),
       },
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
     });
     const text = await upstreamResponse.text();
     const payload = tryParseJson(text);
@@ -293,15 +302,16 @@ app.post("/proxy/test", async (req, res) => {
       upstreamStatusCode: upstreamResponse.status,
       durationMs,
       preview: extractResponsePreview(payload),
-      raw: payload
+      raw: payload,
     });
   } catch (error) {
     res.status(502).json({
       error: {
         message: "Upstream test failed",
         type: "api_error",
-        detail: error instanceof Error ? error.message : "unknown upstream error"
-      }
+        detail:
+          error instanceof Error ? error.message : "unknown upstream error",
+      },
     });
   }
 });
@@ -327,7 +337,10 @@ const extractAssistantContentFromSse = (raw: string) => {
     }
     try {
       const parsed = JSON.parse(data) as {
-        choices?: Array<{ delta?: { content?: string }; message?: { content?: string } }>;
+        choices?: Array<{
+          delta?: { content?: string };
+          message?: { content?: string };
+        }>;
       };
       const deltaContent = parsed.choices?.[0]?.delta?.content;
       if (typeof deltaContent === "string") {
@@ -351,8 +364,8 @@ app.post("/v1/chat/completions", async (req, res) => {
       error: {
         message: "Invalid request body",
         type: "invalid_request_error",
-        detail: parsed.error.issues.map((issue) => issue.message).join("; ")
-      }
+        detail: parsed.error.issues.map((issue) => issue.message).join("; "),
+      },
     });
     return;
   }
@@ -367,7 +380,7 @@ app.post("/v1/chat/completions", async (req, res) => {
     model: normalizedInput.model,
     prompt: captured,
     promptTokens,
-    requestBody: normalizedInput
+    requestBody: normalizedInput,
   });
 
   if (config.mode === "capture_only") {
@@ -391,7 +404,9 @@ app.post("/v1/chat/completions", async (req, res) => {
         object: "chat.completion.chunk",
         created,
         model: normalizedInput.model,
-        choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null }]
+        choices: [
+          { index: 0, delta: { role: "assistant" }, finish_reason: null },
+        ],
       });
 
       for (const part of chunks) {
@@ -400,7 +415,9 @@ app.post("/v1/chat/completions", async (req, res) => {
           object: "chat.completion.chunk",
           created,
           model: normalizedInput.model,
-          choices: [{ index: 0, delta: { content: part }, finish_reason: null }]
+          choices: [
+            { index: 0, delta: { content: part }, finish_reason: null },
+          ],
         });
       }
 
@@ -409,7 +426,7 @@ app.post("/v1/chat/completions", async (req, res) => {
         object: "chat.completion.chunk",
         created,
         model: normalizedInput.model,
-        choices: [{ index: 0, delta: {}, finish_reason: "stop" }]
+        choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
       });
       res.write("data: [DONE]\n\n");
       res.end();
@@ -418,9 +435,9 @@ app.post("/v1/chat/completions", async (req, res) => {
         responseStatus: "success",
         responseBody: {
           stream: true,
-          content
+          content,
         },
-        durationMs: Date.now() - startedAt
+        durationMs: Date.now() - startedAt,
       });
       return;
     }
@@ -429,7 +446,7 @@ app.post("/v1/chat/completions", async (req, res) => {
     completeExchange(record.id, {
       responseStatus: "success",
       responseBody: completion,
-      durationMs: 0
+      durationMs: 0,
     });
     res.json(completion);
     return;
@@ -440,18 +457,19 @@ app.post("/v1/chat/completions", async (req, res) => {
   try {
     upstreamUrl = resolveUpstreamUrl(config.baseUrl, config.path);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "invalid upstream config";
+    const message =
+      error instanceof Error ? error.message : "invalid upstream config";
     completeExchange(record.id, {
       responseStatus: "error",
       errorMessage: message,
-      durationMs: Date.now() - startedAt
+      durationMs: Date.now() - startedAt,
     });
     res.status(400).json({
       error: {
         message: "Invalid upstream config",
         type: "invalid_request_error",
-        detail: message
-      }
+        detail: message,
+      },
     });
     return;
   }
@@ -463,14 +481,17 @@ app.post("/v1/chat/completions", async (req, res) => {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        ...(authorization ? { authorization } : {})
+        ...(authorization ? { authorization } : {}),
       },
-      body: JSON.stringify(normalizedInput)
+      body: JSON.stringify(normalizedInput),
     });
 
     if (normalizedInput.stream) {
-      const contentType = upstreamResponse.headers.get("content-type") ?? "text/event-stream; charset=utf-8";
-      const cacheControl = upstreamResponse.headers.get("cache-control") ?? "no-cache";
+      const contentType =
+        upstreamResponse.headers.get("content-type") ??
+        "text/event-stream; charset=utf-8";
+      const cacheControl =
+        upstreamResponse.headers.get("cache-control") ?? "no-cache";
       res.status(upstreamResponse.status);
       res.setHeader("Content-Type", contentType);
       res.setHeader("Cache-Control", cacheControl);
@@ -513,12 +534,14 @@ app.post("/v1/chat/completions", async (req, res) => {
         responseBody: {
           stream: true,
           assistant: extractAssistantContentFromSse(capturedSse),
-          rawSse: capturedSse
+          rawSse: capturedSse,
         },
         upstreamUrl,
         upstreamStatusCode: upstreamResponse.status,
         durationMs: Date.now() - startedAt,
-        errorMessage: upstreamResponse.ok ? undefined : `upstream returned ${upstreamResponse.status}`
+        errorMessage: upstreamResponse.ok
+          ? undefined
+          : `upstream returned ${upstreamResponse.status}`,
       });
       return;
     }
@@ -532,11 +555,16 @@ app.post("/v1/chat/completions", async (req, res) => {
       upstreamUrl,
       upstreamStatusCode: upstreamResponse.status,
       durationMs: Date.now() - startedAt,
-      errorMessage: upstreamResponse.ok ? undefined : `upstream returned ${upstreamResponse.status}`
+      errorMessage: upstreamResponse.ok
+        ? undefined
+        : `upstream returned ${upstreamResponse.status}`,
     });
 
     const upstreamType = upstreamResponse.headers.get("content-type") ?? "";
-    if (upstreamType.includes("application/json") && typeof upstreamParsed !== "string") {
+    if (
+      upstreamType.includes("application/json") &&
+      typeof upstreamParsed !== "string"
+    ) {
       res.status(upstreamResponse.status).json(upstreamParsed);
       return;
     }
@@ -544,19 +572,20 @@ app.post("/v1/chat/completions", async (req, res) => {
     res.status(upstreamResponse.status).send(text);
     return;
   } catch (error) {
-    const message = error instanceof Error ? error.message : "unknown upstream error";
+    const message =
+      error instanceof Error ? error.message : "unknown upstream error";
     completeExchange(record.id, {
       responseStatus: "error",
       errorMessage: message,
       upstreamUrl,
-      durationMs: Date.now() - startedAt
+      durationMs: Date.now() - startedAt,
     });
     res.status(502).json({
       error: {
         message: "Upstream request failed",
         type: "api_error",
-        detail: message
-      }
+        detail: message,
+      },
     });
   }
 });
@@ -565,9 +594,21 @@ app.use(
   "/trpc",
   createExpressMiddleware({
     router: appRouter,
-    createContext: () => ({})
+    createContext: () => ({}),
   })
 );
+
+// --- SPA fallback: serve index.html for any unmatched GET request ---
+if (existsSync(webDistPath)) {
+  const indexPath = resolve(webDistPath, "index.html");
+  app.get("*", (_req, res) => {
+    if (existsSync(indexPath)) {
+      res.sendFile(indexPath);
+    } else {
+      res.status(404).json({ error: "Not found" });
+    }
+  });
+}
 
 app.listen(port, () => {
   console.log(`server running on http://localhost:${port}`);
