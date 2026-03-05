@@ -1,36 +1,25 @@
 services:
   server:
-    image: oven/bun:1
-    working_dir: /app
-    volumes:
-      - ./:/app
-      - bun-cache:/root/.bun
-      - root-node-modules:/app/node_modules
-      - server-node-modules:/app/apps/server/node_modules
+    build:
+      context: .
+      target: server
     environment:
       - PORT=3000
-    command: sh -lc "bun install && bun run --cwd apps/server dev"
     ports:
       - "23000:3000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   web:
-    image: oven/bun:1
-    working_dir: /app
+    build:
+      context: .
+      target: web
     depends_on:
       - server
     environment:
       - VITE_BACKEND_URL=http://server:3000
-    volumes:
-      - ./:/app
-      - bun-cache:/root/.bun
-      - root-node-modules:/app/node_modules
-      - web-node-modules:/app/apps/web/node_modules
-    command: sh -lc "bun install && bun run --cwd apps/web dev --host 0.0.0.0 --port 5173"
     ports:
       - "5173:5173"
-
-volumes:
-  bun-cache:
-  root-node-modules:
-  server-node-modules:
-  web-node-modules:
