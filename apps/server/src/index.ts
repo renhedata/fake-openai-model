@@ -15,6 +15,8 @@ import {
 import {
   addExchange,
   completeExchange,
+  deleteExchanges,
+  deleteAllExchanges,
   getDashboardState,
   getModels,
   getProxyConfig,
@@ -37,6 +39,22 @@ if (existsSync(webDistPath)) {
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true });
+});
+
+app.delete("/exchanges", (req, res) => {
+  const body = req.body as { ids?: string[]; all?: boolean } | undefined;
+  if (body?.all) {
+    deleteAllExchanges();
+    res.json({ ok: true, deleted: "all" });
+    return;
+  }
+  if (Array.isArray(body?.ids) && body.ids.length > 0) {
+    const ids = body.ids.filter((id): id is string => typeof id === "string");
+    const count = deleteExchanges(ids);
+    res.json({ ok: true, deleted: count });
+    return;
+  }
+  res.status(400).json({ error: { message: "Provide ids array or all: true" } });
 });
 
 app.get("/v1/models", (_req, res) => {

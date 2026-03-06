@@ -13,6 +13,7 @@ export default defineConfig(({ mode }) => {
         "/v1": backendTarget,
         "/proxy": backendTarget,
         "/events": backendTarget,
+        "/exchanges": backendTarget,
         "/trpc": backendTarget,
         "/health": backendTarget
       }

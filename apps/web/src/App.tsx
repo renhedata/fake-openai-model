@@ -9,6 +9,7 @@ import {
   ArrowUpDown,
   Bot,
   CheckCircle2,
+  CheckSquare,
   ChevronDown,
   ChevronRight,
   Clock,
@@ -23,7 +24,9 @@ import {
   Send,
   Settings2,
   Shield,
+  Square,
   Sun,
+  Trash2,
   User,
   X,
   Zap,
@@ -33,6 +36,7 @@ import {
   Server,
   Filter,
   Coins,
+  MinusSquare,
   type LucideIcon
 } from "lucide-react";
 
@@ -261,29 +265,85 @@ const MarkdownSurface = ({ markdown }: { markdown: string }) => (
   </div>
 );
 
-const RoleMessages = ({ messages }: { messages: ChatMessage[] }) => (
-  <div className="space-y-2">
-    {messages.map((msg, idx) => {
-      const cfg = roleConfig[msg.role] ?? defaultRoleConfig;
-      const Icon = cfg.icon;
-      return (
-        <div key={idx} className={`rounded-lg border ${cfg.borderColor} ${cfg.bgColor} overflow-hidden`}>
-          <div className={`flex items-center gap-1.5 px-3 py-1.5 border-b ${cfg.borderColor}`}>
-            <Icon size={12} className={cfg.color} />
-            <span className={`text-[10px] font-semibold uppercase tracking-wider ${cfg.color}`}>{cfg.label}</span>
-          </div>
-          <div className="p-3 max-h-48 overflow-auto">
-            <div className="markdown-body text-sm leading-relaxed">
-              <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
-                {msg.content || "(空)"}
-              </ReactMarkdown>
+const RoleMessages = ({ messages }: { messages: ChatMessage[] }) => {
+  const [expandedMsgs, setExpandedMsgs] = useState<Set<number>>(new Set());
+  const toggleMsg = (idx: number) => setExpandedMsgs((prev) => {
+    const next = new Set(prev);
+    next.has(idx) ? next.delete(idx) : next.add(idx);
+    return next;
+  });
+
+  const TRUNCATE_LEN = 200;
+
+  return (
+    <div className="space-y-1.5">
+      {messages.map((msg, idx) => {
+        const cfg = roleConfig[msg.role] ?? defaultRoleConfig;
+        const Icon = cfg.icon;
+        const isSystem = msg.role === "system";
+        const isLong = msg.content.length > TRUNCATE_LEN;
+        const isExpanded = expandedMsgs.has(idx);
+        // System messages default collapsed, others default expanded
+        const showContent = isSystem ? isExpanded : (!isLong || isExpanded);
+        const displayContent = (!isSystem && isLong && !isExpanded)
+          ? msg.content.slice(0, TRUNCATE_LEN) + "…"
+          : msg.content;
+
+        return (
+          <div key={idx} className="group">
+            {/* Role badge + toggle */}
+            <div className="flex items-center gap-1.5 mb-0.5">
+              <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${cfg.color} ${cfg.bgColor}`}>
+                <Icon size={10} />
+                {cfg.label}
+              </span>
+              {(isSystem || isLong) && (
+                <button
+                  type="button"
+                  className="text-[10px] text-base-content/30 hover:text-base-content/50 transition-colors"
+                  onClick={() => toggleMsg(idx)}
+                >
+                  {isSystem
+                    ? (isExpanded ? "收起" : `展开 (${msg.content.length} 字)`)
+                    : (isExpanded ? "收起" : "展开全部")}
+                </button>
+              )}
             </div>
+
+            {/* Content */}
+            {(isSystem && !showContent) ? (
+              <div
+                className="pl-2 border-l-2 border-base-content/5 cursor-pointer hover:border-base-content/15 transition-colors"
+                onClick={() => toggleMsg(idx)}
+              >
+                <p className="text-xs text-base-content/35 truncate italic">
+                  {msg.content.slice(0, 80)}…
+                </p>
+              </div>
+            ) : (
+              <div className={`pl-2 border-l-2 ${cfg.borderColor}`}>
+                <div className="markdown-body text-[13px] leading-relaxed text-base-content/70">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+                    {displayContent || "(空)"}
+                  </ReactMarkdown>
+                </div>
+                {!isSystem && isLong && !isExpanded && (
+                  <button
+                    type="button"
+                    className="text-[11px] text-primary/60 hover:text-primary mt-0.5 transition-colors"
+                    onClick={() => toggleMsg(idx)}
+                  >
+                    显示全部 →
+                  </button>
+                )}
+              </div>
+            )}
           </div>
-        </div>
-      );
-    })}
-  </div>
-);
+        );
+      })}
+    </div>
+  );
+};
 
 /* ========== Exchange Row (with inline expand) ========== */
 
@@ -291,12 +351,18 @@ const ExchangeRow = memo(function ExchangeRow({
   item,
   serial,
   expanded,
-  onToggle
+  onToggle,
+  selectMode,
+  selected,
+  onSelect
 }: {
   item: ExchangeRecord;
   serial: number;
   expanded: boolean;
   onToggle: () => void;
+  selectMode: boolean;
+  selected: boolean;
+  onSelect: (id: string, checked: boolean) => void;
 }) {
   const promptPreview = truncate(item.prompt || "(空)", 140);
   const responseText = getResponseText(item.responseBody);
@@ -308,13 +374,26 @@ const ExchangeRow = memo(function ExchangeRow({
   const statusVariant = item.responseStatus === "success" ? "success" : item.responseStatus === "error" ? "error" : "warning";
 
   return (
-    <div className={`rounded-lg border transition-all ${expanded ? "border-primary/30 bg-base-100 shadow-lg shadow-primary/5" : "border-base-content/5 bg-base-100 hover:border-base-content/10"}`}>
+    <div className={`rounded-lg border transition-all ${selected ? "border-primary/40 bg-primary/[0.03]" : expanded ? "border-primary/30 bg-base-100 shadow-lg shadow-primary/5" : "border-base-content/5 bg-base-100 hover:border-base-content/10"}`}>
       {/* clickable summary row */}
-      <button
-        type="button"
-        className="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-base-content/[0.02]"
-        onClick={onToggle}
-      >
+      <div className="flex w-full items-center gap-2 px-3 py-2">
+        {/* checkbox */}
+        {selectMode && (
+          <label className="shrink-0 cursor-pointer flex items-center" onClick={(e) => e.stopPropagation()}>
+            <input
+              type="checkbox"
+              className="checkbox checkbox-xs checkbox-primary"
+              checked={selected}
+              onChange={(e) => onSelect(item.id, e.target.checked)}
+            />
+          </label>
+        )}
+
+        <button
+          type="button"
+          className="flex flex-1 items-center gap-2 text-left transition-colors hover:bg-base-content/[0.02] min-w-0"
+          onClick={onToggle}
+        >
         {expanded
           ? <ChevronDown size={14} className="shrink-0 text-primary" />
           : <ChevronRight size={14} className="shrink-0 text-base-content/30" />}
@@ -356,7 +435,8 @@ const ExchangeRow = memo(function ExchangeRow({
         <span className="shrink-0 text-[10px] text-base-content/25" title={formatTimeFull(item.createdAt)}>
           {formatTime(item.createdAt)}
         </span>
-      </button>
+        </button>
+      </div>
 
       {/* expanded detail (inline, no modal) */}
       {expanded && (
@@ -387,10 +467,18 @@ const ExchangeRow = memo(function ExchangeRow({
               <div className="mb-2 flex items-center justify-between">
                 <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-base-content/40">
                   <Send size={11} /> Prompt
+                  {(() => {
+                    const msgs = extractMessages(item.requestBody);
+                    return msgs.length > 0 && (
+                      <span className="font-normal normal-case tracking-normal text-base-content/25">
+                        ({msgs.length} 条消息)
+                      </span>
+                    );
+                  })()}
                 </span>
                 <CopyButton text={item.prompt} />
               </div>
-              <div className="max-h-80 overflow-auto">
+              <div className="max-h-96 overflow-auto">
                 {(() => {
                   const msgs = extractMessages(item.requestBody);
                   return msgs.length > 0
@@ -676,6 +764,11 @@ export const App = () => {
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | "success" | "error" | "pending">("all");
 
+  /* selection */
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [deleting, setDeleting] = useState(false);
+
   /* theme */
   const [theme, setTheme] = useState<"light" | "business">(() => {
     const saved = localStorage.getItem("theme");
@@ -832,6 +925,67 @@ export const App = () => {
     setVisibleCount((p) => Math.min(p + PAGE_SIZE, filteredItems.length));
   }, [filteredItems.length]);
 
+  /* selection helpers */
+  const onSelectItem = useCallback((id: string, checked: boolean) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      checked ? next.add(id) : next.delete(id);
+      return next;
+    });
+  }, []);
+
+  const selectAll = useCallback(() => {
+    setSelectedIds(new Set(filteredItems.map((i) => i.id)));
+  }, [filteredItems]);
+
+  const deselectAll = useCallback(() => {
+    setSelectedIds(new Set());
+  }, []);
+
+  const toggleSelectMode = useCallback(() => {
+    setSelectMode((p) => {
+      if (p) setSelectedIds(new Set());
+      return !p;
+    });
+  }, []);
+
+  const deleteSelected = useCallback(async () => {
+    if (selectedIds.size === 0) return;
+    setDeleting(true);
+    try {
+      const r = await fetch("/exchanges", {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ids: Array.from(selectedIds) })
+      });
+      if (!r.ok) throw new Error("删除失败");
+      setSelectedIds(new Set());
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setDeleting(false);
+    }
+  }, [selectedIds]);
+
+  const deleteAll = useCallback(async () => {
+    if (!window.confirm("确定要删除所有记录吗？此操作不可恢复。")) return;
+    setDeleting(true);
+    try {
+      const r = await fetch("/exchanges", {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ all: true })
+      });
+      if (!r.ok) throw new Error("删除失败");
+      setSelectedIds(new Set());
+      setSelectMode(false);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setDeleting(false);
+    }
+  }, []);
+
   const { stats } = dashboard;
 
   return (
@@ -885,41 +1039,97 @@ export const App = () => {
 
       {/* ── search + filter bar ── */}
       <div className="shrink-0 flex items-center gap-2 border-b border-base-content/5 bg-base-300/30 px-4 py-2">
-        <div className="relative flex-1 max-w-md">
-          <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-base-content/30" />
-          <input
-            className="input input-bordered input-sm w-full bg-base-100 pl-8 text-xs"
-            placeholder="搜索 prompt, model, response …"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-          />
-          {searchQuery && (
+        {/* select mode toggle */}
+        <button
+          type="button"
+          className={`btn btn-ghost btn-xs gap-1 h-6 min-h-0 ${selectMode ? "text-primary" : "text-base-content/40"}`}
+          onClick={toggleSelectMode}
+          title={selectMode ? "退出选择" : "选择模式"}
+        >
+          {selectMode ? <CheckSquare size={13} /> : <Square size={13} />}
+        </button>
+
+        {/* selection toolbar (shown when selectMode is on) */}
+        {selectMode && (
+          <div className="flex items-center gap-1.5">
             <button
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-base-content/30 hover:text-base-content/60"
-              onClick={() => setSearchQuery("")}
               type="button"
+              className="text-[10px] text-base-content/50 hover:text-base-content/70 transition-colors px-1.5 py-0.5 rounded hover:bg-base-content/5"
+              onClick={selectedIds.size === filteredItems.length ? deselectAll : selectAll}
             >
-              <X size={12} />
+              {selectedIds.size === filteredItems.length ? (
+                <span className="flex items-center gap-1"><MinusSquare size={10} /> 取消全选</span>
+              ) : (
+                <span className="flex items-center gap-1"><CheckSquare size={10} /> 全选</span>
+              )}
             </button>
-          )}
-        </div>
-        <div className="flex items-center gap-1">
-          <Filter size={12} className="text-base-content/30" />
-          {(["all", "success", "error", "pending"] as const).map((s) => (
+            {selectedIds.size > 0 && (
+              <>
+                <span className="text-[10px] tabular-nums text-primary font-medium">
+                  已选 {selectedIds.size}
+                </span>
+                <button
+                  type="button"
+                  className="btn btn-error btn-xs gap-1 h-5 min-h-0 text-[10px]"
+                  onClick={deleteSelected}
+                  disabled={deleting}
+                >
+                  <Trash2 size={10} />
+                  {deleting ? "删除中…" : "删除选中"}
+                </button>
+              </>
+            )}
+            <span className="text-base-content/10">|</span>
             <button
-              key={s}
               type="button"
-              className={`rounded border px-2 py-0.5 text-[10px] font-medium transition-colors ${
-                statusFilter === s
-                  ? "border-primary bg-primary/15 text-primary"
-                  : "border-base-content/10 text-base-content/40 hover:text-base-content/60"
-              }`}
-              onClick={() => setStatusFilter(s)}
+              className="text-[10px] text-error/50 hover:text-error transition-colors px-1.5 py-0.5 rounded hover:bg-error/5 flex items-center gap-1"
+              onClick={deleteAll}
+              disabled={deleting || dashboard.items.length === 0}
             >
-              {s === "all" ? "全部" : s}
+              <Trash2 size={10} /> 清空全部
             </button>
-          ))}
-        </div>
+          </div>
+        )}
+
+        {!selectMode && (
+          <>
+            <div className="relative flex-1 max-w-md">
+              <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-base-content/30" />
+              <input
+                className="input input-bordered input-sm w-full bg-base-100 pl-8 text-xs"
+                placeholder="搜索 prompt, model, response …"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+              />
+              {searchQuery && (
+                <button
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-base-content/30 hover:text-base-content/60"
+                  onClick={() => setSearchQuery("")}
+                  type="button"
+                >
+                  <X size={12} />
+                </button>
+              )}
+            </div>
+            <div className="flex items-center gap-1">
+              <Filter size={12} className="text-base-content/30" />
+              {(["all", "success", "error", "pending"] as const).map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  className={`rounded border px-2 py-0.5 text-[10px] font-medium transition-colors ${
+                    statusFilter === s
+                      ? "border-primary bg-primary/15 text-primary"
+                      : "border-base-content/10 text-base-content/40 hover:text-base-content/60"
+                  }`}
+                  onClick={() => setStatusFilter(s)}
+                >
+                  {s === "all" ? "全部" : s}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
         <span className="text-[10px] text-base-content/25 tabular-nums ml-auto">
           {filteredItems.length === dashboard.items.length
             ? `${dashboard.items.length} 条`
@@ -947,6 +1157,9 @@ export const App = () => {
                   serial={serial}
                   expanded={expandedId === item.id}
                   onToggle={() => setExpandedId((p) => (p === item.id ? null : item.id))}
+                  selectMode={selectMode}
+                  selected={selectedIds.has(item.id)}
+                  onSelect={onSelectItem}
                 />
               );
             })

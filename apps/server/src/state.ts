@@ -462,6 +462,21 @@ export const setModels = (items: ModelRecord[]) => {
   return getModels();
 };
 
+export const deleteExchanges = (ids: string[]) => {
+  if (ids.length === 0) return 0;
+  const placeholders = ids.map(() => "?").join(", ");
+  const result = db.prepare(`DELETE FROM exchanges WHERE id IN (${placeholders})`).run(...ids);
+  emit(null);
+  return typeof result === "object" && result !== null && "changes" in result
+    ? Number((result as { changes: number }).changes)
+    : ids.length;
+};
+
+export const deleteAllExchanges = () => {
+  db.prepare("DELETE FROM exchanges").run();
+  emit(null);
+};
+
 export const getDashboardState = (): DashboardState => ({
   items: [...getExchanges()],
   stats: getExchangeStats(),
