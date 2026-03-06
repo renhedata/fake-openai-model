@@ -7,10 +7,12 @@ import { zhCN } from "date-fns/locale";
 import {
   Activity,
   ArrowUpDown,
+  Bot,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
   Clock,
+  Cpu,
   ExternalLink,
   Hash,
   Loader2,
@@ -22,6 +24,7 @@ import {
   Settings2,
   Shield,
   Sun,
+  User,
   X,
   Zap,
   XCircle,
@@ -174,6 +177,35 @@ const buildResponseMarkdown = (v: unknown) => {
   return t.trim() ? t : `\`\`\`json\n${safeStringify(v ?? {})}\n\`\`\``;
 };
 
+/** Extract messages array with roles from requestBody */
+type ChatMessage = { role: string; content: string };
+
+const extractMessages = (requestBody: unknown): ChatMessage[] => {
+  if (!requestBody || typeof requestBody !== "object") return [];
+  const body = requestBody as { messages?: Array<{ role?: string; content?: unknown }> };
+  if (!Array.isArray(body.messages)) return [];
+  return body.messages.map((m) => {
+    const role = typeof m.role === "string" ? m.role : "unknown";
+    let content = "";
+    if (typeof m.content === "string") {
+      content = m.content;
+    } else if (Array.isArray(m.content)) {
+      content = m.content
+        .map((part: { text?: string; input_text?: string }) => part.text ?? part.input_text ?? "")
+        .join("");
+    }
+    return { role, content };
+  });
+};
+
+const roleConfig: Record<string, { icon: LucideIcon; label: string; color: string; bgColor: string; borderColor: string }> = {
+  system: { icon: Cpu, label: "System", color: "text-warning", bgColor: "bg-warning/5", borderColor: "border-warning/20" },
+  user: { icon: User, label: "User", color: "text-info", bgColor: "bg-info/5", borderColor: "border-info/20" },
+  assistant: { icon: Bot, label: "Assistant", color: "text-success", bgColor: "bg-success/5", borderColor: "border-success/20" },
+};
+
+const defaultRoleConfig = { icon: Hash, label: "Unknown", color: "text-base-content/50", bgColor: "bg-base-content/5", borderColor: "border-base-content/10" };
+
 const truncate = (s: string, n = 120) => (s.length <= n ? s : `${s.slice(0, n)}…`);
 
 /* ========== atoms ========== */
@@ -226,6 +258,30 @@ const MarkdownSurface = ({ markdown }: { markdown: string }) => (
     <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
       {markdown}
     </ReactMarkdown>
+  </div>
+);
+
+const RoleMessages = ({ messages }: { messages: ChatMessage[] }) => (
+  <div className="space-y-2">
+    {messages.map((msg, idx) => {
+      const cfg = roleConfig[msg.role] ?? defaultRoleConfig;
+      const Icon = cfg.icon;
+      return (
+        <div key={idx} className={`rounded-lg border ${cfg.borderColor} ${cfg.bgColor} overflow-hidden`}>
+          <div className={`flex items-center gap-1.5 px-3 py-1.5 border-b ${cfg.borderColor}`}>
+            <Icon size={12} className={cfg.color} />
+            <span className={`text-[10px] font-semibold uppercase tracking-wider ${cfg.color}`}>{cfg.label}</span>
+          </div>
+          <div className="p-3 max-h-48 overflow-auto">
+            <div className="markdown-body text-sm leading-relaxed">
+              <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+                {msg.content || "(空)"}
+              </ReactMarkdown>
+            </div>
+          </div>
+        </div>
+      );
+    })}
   </div>
 );
 
@@ -334,8 +390,13 @@ const ExchangeRow = memo(function ExchangeRow({
                 </span>
                 <CopyButton text={item.prompt} />
               </div>
-              <div className="max-h-64 overflow-auto rounded-lg bg-base-200/50 p-3 text-sm leading-relaxed text-base-content/70 whitespace-pre-wrap">
-                {item.prompt || "(空)"}
+              <div className="max-h-80 overflow-auto">
+                {(() => {
+                  const msgs = extractMessages(item.requestBody);
+                  return msgs.length > 0
+                    ? <RoleMessages messages={msgs} />
+                    : <div className="rounded-lg bg-base-200/50 p-3 text-sm leading-relaxed text-base-content/70 whitespace-pre-wrap">{item.prompt || "(空)"}</div>;
+                })()}
               </div>
             </div>
 
@@ -616,14 +677,14 @@ export const App = () => {
   const [statusFilter, setStatusFilter] = useState<"all" | "success" | "error" | "pending">("all");
 
   /* theme */
-  const [theme, setTheme] = useState<"winter" | "business">(() => {
+  const [theme, setTheme] = useState<"light" | "business">(() => {
     const saved = localStorage.getItem("theme");
-    if (saved === "winter" || saved === "business") return saved;
-    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "business" : "winter";
+    if (saved === "light" || saved === "business") return saved;
+    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "business" : "light";
   });
   const isDark = theme === "business";
   const toggleTheme = useCallback(() => {
-    const next = isDark ? "winter" : "business";
+    const next = isDark ? "light" : "business";
     setTheme(next);
     document.documentElement.setAttribute("data-theme", next);
     localStorage.setItem("theme", next);

@@ -46,19 +46,19 @@
   }
 }
 
-/* Light theme (nord) code block overrides */
-[data-theme="nord"] .hljs {
-  background: #eceff4;
-  color: #2e3440;
+/* Light theme code block overrides */
+[data-theme="light"] .hljs {
+  background: #f1f5f9;
+  color: #1e293b;
 }
 
-[data-theme="nord"] .markdown-body pre {
-  background: #eceff4;
+[data-theme="light"] .markdown-body pre {
+  background: #f1f5f9;
 }
 
-[data-theme="nord"] .markdown-body code:not(pre code) {
-  background: #d8dee9;
-  color: #2e3440;
+[data-theme="light"] .markdown-body code:not(pre code) {
+  background: #e2e8f0;
+  color: #1e293b;
 }
 
 /* Override github-markdown-css background to be transparent */

@@ -8,7 +8,7 @@ import "./index.css";
 /* Apply saved theme or system preference before first paint */
 const saved = localStorage.getItem("theme");
 const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-const initial = saved ?? (prefersDark ? "business" : "nord");
+const initial = saved ?? (prefersDark ? "business" : "light");
 document.documentElement.setAttribute("data-theme", initial);
 
 const root = document.getElementById("app");
