@@ -5,8 +5,6 @@ import { resolve } from "node:path";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { appRouter } from "./router.js";
 import {
-  capturePrompt,
-  chatInputSchema,
   createFakeCompletion,
   createFakeStreamText,
   proxyConfigSchema,
@@ -403,8 +401,40 @@ const tryParseJson = (value: string) => {
   }
 };
 
+/** Extract prompt text directly from raw body - no schema needed */
+const extractPromptText = (body: Record<string, unknown>): { captured: string; promptTokens: number } => {
+  if (!Array.isArray(body.messages)) return { captured: "", promptTokens: 1 };
+  const parts: string[] = [];
+  for (const m of body.messages) {
+    if (!m || typeof m !== "object") continue;
+    const msg = m as Record<string, unknown>;
+    if (msg.role !== "user" && msg.role !== "system") continue;
+    if (typeof msg.content === "string") {
+      parts.push(msg.content);
+    } else if (Array.isArray(msg.content)) {
+      for (const part of msg.content) {
+        if (typeof part === "string") parts.push(part);
+        else if (part && typeof part === "object") {
+          const p = part as Record<string, unknown>;
+          if (typeof p.text === "string") parts.push(p.text);
+          else if (typeof p.input_text === "string") parts.push(p.input_text);
+        }
+      }
+    }
+  }
+  const captured = parts.join("\n").trim();
+  return { captured, promptTokens: Math.max(1, Math.ceil(Math.max(1, captured.length) / 4)) };
+};
+
 const extractAssistantContentFromSse = (raw: string) => {
   let content = "";
+  const toolCalls: Array<{
+    index: number;
+    id?: string;
+    type?: string;
+    function: { name: string; arguments: string };
+  }> = [];
+
   for (const line of raw.split("\n")) {
     const trimmed = line.trim();
     if (!trimmed.startsWith("data:")) {
@@ -417,13 +447,43 @@ const extractAssistantContentFromSse = (raw: string) => {
     try {
       const parsed = JSON.parse(data) as {
         choices?: Array<{
-          delta?: { content?: string };
+          delta?: {
+            content?: string;
+            tool_calls?: Array<{
+              index?: number;
+              id?: string;
+              type?: string;
+              function?: { name?: string; arguments?: string };
+            }>;
+          };
           message?: { content?: string };
         }>;
       };
-      const deltaContent = parsed.choices?.[0]?.delta?.content;
-      if (typeof deltaContent === "string") {
-        content += deltaContent;
+      const delta = parsed.choices?.[0]?.delta;
+      if (delta?.content && typeof delta.content === "string") {
+        content += delta.content;
+      }
+      // Capture reasoning/thinking content
+      const reasoning = (delta as Record<string, unknown> | undefined)?.reasoning_content;
+      if (typeof reasoning === "string") {
+        content += reasoning;
+      }
+      // Accumulate tool_calls from streaming deltas
+      if (Array.isArray(delta?.tool_calls)) {
+        for (const tc of delta.tool_calls) {
+          const idx = tc.index ?? 0;
+          if (!toolCalls[idx]) {
+            toolCalls[idx] = {
+              index: idx,
+              id: tc.id,
+              type: tc.type ?? "function",
+              function: { name: "", arguments: "" },
+            };
+          }
+          if (tc.id) toolCalls[idx].id = tc.id;
+          if (tc.function?.name) toolCalls[idx].function.name += tc.function.name;
+          if (tc.function?.arguments) toolCalls[idx].function.arguments += tc.function.arguments;
+        }
       }
       const messageContent = parsed.choices?.[0]?.message?.content;
       if (typeof messageContent === "string") {
@@ -433,37 +493,42 @@ const extractAssistantContentFromSse = (raw: string) => {
       continue;
     }
   }
-  return content.trim();
+
+  const result = content.trim();
+  if (toolCalls.length > 0) {
+    const tcSummary = toolCalls
+      .filter(Boolean)
+      .map((tc) => `${tc.function.name}(${tc.function.arguments})`)
+      .join("; ");
+    return result ? `${result}\n\n[Tool Calls] ${tcSummary}` : `[Tool Calls] ${tcSummary}`;
+  }
+  return result;
 };
 
 app.post("/v1/chat/completions", async (req, res) => {
-  const parsed = chatInputSchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({
-      error: {
-        message: "Invalid request body",
-        type: "invalid_request_error",
-        detail: parsed.error.issues.map((issue) => issue.message).join("; "),
-      },
-    });
-    return;
-  }
-
-  const input = parsed.data;
-  const { captured, promptTokens } = capturePrompt(input);
   const config = getProxyConfig();
-  const model = config.modelOverride.trim() || input.model;
-  const normalizedInput = model === input.model ? input : { ...input, model };
+  const body = req.body as Record<string, unknown>;
+
+  // --- Minimal extraction from raw body (no schema validation) ---
+  const rawModel = typeof body.model === "string" ? body.model : "unknown";
+  const model = config.modelOverride.trim() || rawModel;
+  const stream = body.stream === true;
+  const { captured, promptTokens } = extractPromptText(body);
+
+  const recordBody = config.modelOverride.trim()
+    ? { ...body, model }
+    : body;
   const record = addExchange({
     mode: config.mode,
-    model: normalizedInput.model,
+    model,
     prompt: captured,
     promptTokens,
-    requestBody: normalizedInput,
+    requestBody: recordBody,
   });
 
+  // --- Capture Only mode: generate fake response ---
   if (config.mode === "capture_only") {
-    if (normalizedInput.stream) {
+    if (stream) {
       const content = createFakeStreamText(captured);
       const startedAt = Date.now();
       const id = `chatcmpl_${Date.now()}`;
@@ -482,7 +547,7 @@ app.post("/v1/chat/completions", async (req, res) => {
         id,
         object: "chat.completion.chunk",
         created,
-        model: normalizedInput.model,
+        model,
         choices: [
           { index: 0, delta: { role: "assistant" }, finish_reason: null },
         ],
@@ -493,7 +558,7 @@ app.post("/v1/chat/completions", async (req, res) => {
           id,
           object: "chat.completion.chunk",
           created,
-          model: normalizedInput.model,
+          model,
           choices: [
             { index: 0, delta: { content: part }, finish_reason: null },
           ],
@@ -504,7 +569,7 @@ app.post("/v1/chat/completions", async (req, res) => {
         id,
         object: "chat.completion.chunk",
         created,
-        model: normalizedInput.model,
+        model,
         choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
       });
       res.write("data: [DONE]\n\n");
@@ -521,7 +586,10 @@ app.post("/v1/chat/completions", async (req, res) => {
       return;
     }
 
-    const completion = createFakeCompletion(normalizedInput, promptTokens);
+    const completion = createFakeCompletion(
+      { model, messages: [], stream: false },
+      promptTokens,
+    );
     completeExchange(record.id, {
       responseStatus: "success",
       responseBody: completion,
@@ -553,10 +621,8 @@ app.post("/v1/chat/completions", async (req, res) => {
     return;
   }
 
-  // Build forward body preserving ALL original fields (tools, tool_choice, etc.)
-  const forwardBody: Record<string, unknown> = {
-    ...(req.body as Record<string, unknown>),
-  };
+  // --- Forward mode: send ORIGINAL request body to upstream ---
+  const forwardBody: Record<string, unknown> = { ...body };
   if (config.modelOverride.trim()) {
     forwardBody.model = config.modelOverride.trim();
   }
@@ -570,7 +636,7 @@ app.post("/v1/chat/completions", async (req, res) => {
       body: JSON.stringify(forwardBody),
     });
 
-    if (normalizedInput.stream) {
+    if (stream) {
       const contentType =
         upstreamResponse.headers.get("content-type") ??
         "text/event-stream; charset=utf-8";
@@ -580,6 +646,11 @@ app.post("/v1/chat/completions", async (req, res) => {
       res.setHeader("Content-Type", contentType);
       res.setHeader("Cache-Control", cacheControl);
       res.setHeader("Connection", "keep-alive");
+      // Forward additional upstream headers
+      for (const key of ["x-request-id", "openai-organization", "openai-processing-ms", "openai-version"]) {
+        const val = upstreamResponse.headers.get(key);
+        if (val) res.setHeader(key, val);
+      }
 
       const captureLimit = 24000;
       let capturedSse = "";

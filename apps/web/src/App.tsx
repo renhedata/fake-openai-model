@@ -143,7 +143,7 @@ const safeStringify = (v: unknown) => {
 const getResponseText = (v: unknown): string => {
   if (!v || typeof v !== "object") return "";
   const r = v as {
-    choices?: Array<{ message?: { content?: string } }>;
+    choices?: Array<{ message?: { content?: string; reasoning_content?: string; tool_calls?: Array<{ function?: { name?: string; arguments?: string } }> } }>;
     assistant?: string;
     content?: string;
     output_text?: string;
@@ -151,7 +151,28 @@ const getResponseText = (v: unknown): string => {
   if (typeof r.assistant === "string") return r.assistant;
   if (typeof r.output_text === "string") return r.output_text;
   if (typeof r.content === "string") return r.content;
-  return typeof r.choices?.[0]?.message?.content === "string" ? r.choices[0].message.content : "";
+  const msg = r.choices?.[0]?.message;
+  if (msg) {
+    let text = "";
+    if (typeof msg.reasoning_content === "string" && msg.reasoning_content.trim()) {
+      text += `<think>\n${msg.reasoning_content}\n</think>\n\n`;
+    }
+    if (typeof msg.content === "string" && msg.content.trim()) {
+      text += msg.content;
+    }
+    if (text.trim()) return text;
+    // Handle tool_calls response
+    if (Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
+      return msg.tool_calls
+        .map((tc) => {
+          const fn = tc.function;
+          if (!fn) return "[tool_call]";
+          return `[Tool Call] ${fn.name ?? "?"}(${fn.arguments ?? ""})`;
+        })
+        .join("\n");
+    }
+  }
+  return "";
 };
 
 /** Extract completion tokens from response body */
@@ -181,12 +202,11 @@ const buildResponseMarkdown = (v: unknown) => {
   return t.trim() ? t : `\`\`\`json\n${safeStringify(v ?? {})}\n\`\`\``;
 };
 
-/** Extract messages array with roles from requestBody */
-type ChatMessage = { role: string; content: string };
+type ChatMessage = { role: string; content: string; toolCalls?: Array<{ id?: string; name: string; arguments: string }>; toolCallId?: string; name?: string };
 
 const extractMessages = (requestBody: unknown): ChatMessage[] => {
   if (!requestBody || typeof requestBody !== "object") return [];
-  const body = requestBody as { messages?: Array<{ role?: string; content?: unknown }> };
+  const body = requestBody as { messages?: Array<Record<string, unknown>> };
   if (!Array.isArray(body.messages)) return [];
   return body.messages.map((m) => {
     const role = typeof m.role === "string" ? m.role : "unknown";
@@ -194,11 +214,35 @@ const extractMessages = (requestBody: unknown): ChatMessage[] => {
     if (typeof m.content === "string") {
       content = m.content;
     } else if (Array.isArray(m.content)) {
-      content = m.content
-        .map((part: { text?: string; input_text?: string }) => part.text ?? part.input_text ?? "")
+      content = (m.content as Array<Record<string, unknown>>)
+        .map((part) => {
+          if (typeof part === "string") return part;
+          if (typeof part.text === "string") return part.text;
+          if (typeof part.input_text === "string") return part.input_text;
+          // Image URL parts
+          if (part.type === "image_url" && part.image_url) {
+            const url = typeof part.image_url === "string" ? part.image_url : (part.image_url as Record<string, unknown>).url;
+            return `[Image: ${typeof url === "string" ? url.slice(0, 80) : "..."}]`;
+          }
+          return "";
+        })
+        .filter(Boolean)
         .join("");
     }
-    return { role, content };
+    // Extract tool_calls from assistant messages
+    const toolCalls = Array.isArray(m.tool_calls)
+      ? (m.tool_calls as Array<Record<string, unknown>>).map((tc) => {
+          const fn = tc.function as Record<string, unknown> | undefined;
+          return {
+            id: typeof tc.id === "string" ? tc.id : undefined,
+            name: typeof fn?.name === "string" ? fn.name : "unknown",
+            arguments: typeof fn?.arguments === "string" ? fn.arguments : "",
+          };
+        })
+      : undefined;
+    const toolCallId = typeof m.tool_call_id === "string" ? m.tool_call_id : undefined;
+    const name = typeof m.name === "string" ? m.name : undefined;
+    return { role, content, toolCalls, toolCallId, name };
   });
 };
 
@@ -206,6 +250,8 @@ const roleConfig: Record<string, { icon: LucideIcon; label: string; color: strin
   system: { icon: Cpu, label: "System", color: "text-warning", bgColor: "bg-warning/5", borderColor: "border-warning/20" },
   user: { icon: User, label: "User", color: "text-info", bgColor: "bg-info/5", borderColor: "border-info/20" },
   assistant: { icon: Bot, label: "Assistant", color: "text-success", bgColor: "bg-success/5", borderColor: "border-success/20" },
+  tool: { icon: Zap, label: "Tool", color: "text-secondary", bgColor: "bg-secondary/5", borderColor: "border-secondary/20" },
+  function: { icon: Zap, label: "Function", color: "text-secondary", bgColor: "bg-secondary/5", borderColor: "border-secondary/20" },
 };
 
 const defaultRoleConfig = { icon: Hash, label: "Unknown", color: "text-base-content/50", bgColor: "bg-base-content/5", borderColor: "border-base-content/10" };
@@ -281,13 +327,25 @@ const RoleMessages = ({ messages }: { messages: ChatMessage[] }) => {
         const cfg = roleConfig[msg.role] ?? defaultRoleConfig;
         const Icon = cfg.icon;
         const isSystem = msg.role === "system";
-        const isLong = msg.content.length > TRUNCATE_LEN;
+
+        // Build display content: include tool_calls info for assistant, tool_call_id for tool messages
+        let displayText = msg.content;
+        if (msg.role === "assistant" && msg.toolCalls && msg.toolCalls.length > 0) {
+          const tcText = msg.toolCalls
+            .map((tc) => `📎 ${tc.name}(${tc.arguments.length > 200 ? tc.arguments.slice(0, 200) + '…' : tc.arguments})`)
+            .join("\n");
+          displayText = displayText ? `${displayText}\n\n${tcText}` : tcText;
+        }
+        if (msg.role === "tool" && msg.toolCallId) {
+          displayText = `[tool_call_id: ${msg.toolCallId}]${msg.name ? ` [name: ${msg.name}]` : ""}\n${displayText}`;
+        }
+
+        const isLong = displayText.length > TRUNCATE_LEN;
         const isExpanded = expandedMsgs.has(idx);
-        // System messages default collapsed, others default expanded
         const showContent = isSystem ? isExpanded : (!isLong || isExpanded);
-        const displayContent = (!isSystem && isLong && !isExpanded)
-          ? msg.content.slice(0, TRUNCATE_LEN) + "…"
-          : msg.content;
+        const shownContent = (!isSystem && isLong && !isExpanded)
+          ? displayText.slice(0, TRUNCATE_LEN) + "…"
+          : displayText;
 
         return (
           <div key={idx} className="group">
@@ -296,6 +354,7 @@ const RoleMessages = ({ messages }: { messages: ChatMessage[] }) => {
               <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${cfg.color} ${cfg.bgColor}`}>
                 <Icon size={10} />
                 {cfg.label}
+                {msg.name && <span className="font-normal normal-case">({msg.name})</span>}
               </span>
               {(isSystem || isLong) && (
                 <button
@@ -304,7 +363,7 @@ const RoleMessages = ({ messages }: { messages: ChatMessage[] }) => {
                   onClick={() => toggleMsg(idx)}
                 >
                   {isSystem
-                    ? (isExpanded ? "收起" : `展开 (${msg.content.length} 字)`)
+                    ? (isExpanded ? "收起" : `展开 (${displayText.length} 字)`)
                     : (isExpanded ? "收起" : "展开全部")}
                 </button>
               )}
@@ -317,14 +376,14 @@ const RoleMessages = ({ messages }: { messages: ChatMessage[] }) => {
                 onClick={() => toggleMsg(idx)}
               >
                 <p className="text-xs text-base-content/35 truncate italic">
-                  {msg.content.slice(0, 80)}…
+                  {displayText.slice(0, 80)}…
                 </p>
               </div>
             ) : (
               <div className={`pl-2 border-l-2 ${cfg.borderColor}`}>
                 <div className="markdown-body text-[13px] leading-relaxed text-base-content/70">
                   <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
-                    {displayContent || "(空)"}
+                    {shownContent || "(空)"}
                   </ReactMarkdown>
                 </div>
                 {!isSystem && isLong && !isExpanded && (
@@ -364,7 +423,20 @@ const ExchangeRow = memo(function ExchangeRow({
   selected: boolean;
   onSelect: (id: string, checked: boolean) => void;
 }) {
-  const promptPreview = truncate(item.prompt || "(空)", 140);
+  // Memoize messages extraction
+  const messages = useMemo(() => extractMessages(item.requestBody), [item.requestBody]);
+
+  // Show LAST user message in collapsed preview (not all messages concatenated)
+  const lastUserMsg = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === "user" && messages[i].content.trim()) {
+        return messages[i].content;
+      }
+    }
+    return item.prompt;
+  }, [messages, item.prompt]);
+
+  const promptPreview = truncate(lastUserMsg || "(空)", 140);
   const responseText = getResponseText(item.responseBody);
   const responsePreview = truncate(responseText || safeStringify(item.responseBody ?? ""), 140);
   const completionTokens = getCompletionTokens(item.responseBody);
@@ -467,24 +539,18 @@ const ExchangeRow = memo(function ExchangeRow({
               <div className="mb-2 flex items-center justify-between">
                 <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-base-content/40">
                   <Send size={11} /> Prompt
-                  {(() => {
-                    const msgs = extractMessages(item.requestBody);
-                    return msgs.length > 0 && (
-                      <span className="font-normal normal-case tracking-normal text-base-content/25">
-                        ({msgs.length} 条消息)
-                      </span>
-                    );
-                  })()}
+                  {messages.length > 0 && (
+                    <span className="font-normal normal-case tracking-normal text-base-content/25">
+                      ({messages.length} 条消息)
+                    </span>
+                  )}
                 </span>
-                <CopyButton text={item.prompt} />
+                <CopyButton text={lastUserMsg} />
               </div>
               <div className="max-h-96 overflow-auto">
-                {(() => {
-                  const msgs = extractMessages(item.requestBody);
-                  return msgs.length > 0
-                    ? <RoleMessages messages={msgs} />
-                    : <div className="rounded-lg bg-base-200/50 p-3 text-sm leading-relaxed text-base-content/70 whitespace-pre-wrap">{item.prompt || "(空)"}</div>;
-                })()}
+                {messages.length > 0
+                  ? <RoleMessages messages={messages} />
+                  : <div className="rounded-lg bg-base-200/50 p-3 text-sm leading-relaxed text-base-content/70 whitespace-pre-wrap">{item.prompt || "(空)"}</div>}
               </div>
             </div>
 
