@@ -13,8 +13,8 @@ const contentPartSchema = z
 
 const messageSchema = z.object({
   role: z.string(),
-  content: z.union([z.string(), z.array(contentPartSchema)])
-});
+  content: z.unknown().optional(),
+}).passthrough();
 
 export const chatInputSchema = z.object({
   model: z.string(),
@@ -22,7 +22,7 @@ export const chatInputSchema = z.object({
   temperature: z.number().optional(),
   max_tokens: z.number().optional(),
   stream: z.boolean().optional()
-});
+}).passthrough();
 
 export const proxyModeSchema = z.enum(["capture_only", "forward"]);
 export const apiTypeSchema = z.enum(["chat_completions", "responses"]);
@@ -63,11 +63,23 @@ const replyPool = [
 
 const randomReply = () => replyPool[Math.floor(Math.random() * replyPool.length)];
 
-const toMessageText = (content: z.infer<typeof messageSchema>["content"]) => {
+const toMessageText = (content: unknown): string => {
   if (typeof content === "string") {
     return content;
   }
-  return content.map((part) => part.text ?? part.input_text ?? "").join("");
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (typeof part === "string") return part;
+        if (part && typeof part === "object") {
+          const p = part as Record<string, unknown>;
+          return String(p.text ?? p.input_text ?? "");
+        }
+        return "";
+      })
+      .join("");
+  }
+  return "";
 };
 
 export const capturePrompt = (input: z.infer<typeof chatInputSchema>) => {

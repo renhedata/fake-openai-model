@@ -29,7 +29,7 @@ const app = express();
 const port = Number(process.env.PORT ?? 3001);
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "50mb" }));
 
 // --- Serve static web assets ---
 const webDistPath = resolve(import.meta.dirname ?? __dirname, "../../web/dist");
@@ -57,7 +57,30 @@ app.delete("/exchanges", (req, res) => {
   res.status(400).json({ error: { message: "Provide ids array or all: true" } });
 });
 
-app.get("/v1/models", (_req, res) => {
+app.get("/v1/models", async (req, res) => {
+  const config = getProxyConfig();
+  if (config.mode === "forward" && config.baseUrl.trim()) {
+    try {
+      const modelsUrl = resolveUpstreamUrl(config.baseUrl, "/v1/models");
+      const authorization = resolveAuthorization(req, config.apiKey);
+      const upstreamRes = await fetch(modelsUrl, {
+        method: "GET",
+        headers: {
+          ...(authorization ? { authorization } : {}),
+        },
+      });
+      const text = await upstreamRes.text();
+      const contentType = upstreamRes.headers.get("content-type") ?? "";
+      if (contentType.includes("application/json")) {
+        res.status(upstreamRes.status).json(JSON.parse(text));
+      } else {
+        res.status(upstreamRes.status).type(contentType || "text/plain").send(text);
+      }
+      return;
+    } catch {
+      // Fallback to local models on network error
+    }
+  }
   const models = getModels();
   res.json({
     object: "list",
@@ -185,6 +208,44 @@ const resolveUpstreamUrl = (baseUrl: string, path: string) => {
     throw new Error("Missing upstream baseUrl");
   }
   return new URL(trimmedPath || "/v1/chat/completions", trimmedBase).toString();
+};
+
+const HOP_BY_HOP_HEADERS = new Set([
+  "connection",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "te",
+  "trailers",
+  "transfer-encoding",
+  "upgrade",
+  "host",
+  "content-length",
+]);
+
+const buildForwardHeaders = (
+  req: express.Request,
+  apiKey: string
+): Record<string, string> => {
+  const headers: Record<string, string> = {};
+  for (const [key, value] of Object.entries(req.headers)) {
+    if (HOP_BY_HOP_HEADERS.has(key.toLowerCase())) continue;
+    if (typeof value === "string") {
+      headers[key] = value;
+    } else if (Array.isArray(value)) {
+      headers[key] = value.join(", ");
+    }
+  }
+  const auth = resolveAuthorization(req, apiKey);
+  if (auth) {
+    headers["authorization"] = auth;
+  } else {
+    delete headers["authorization"];
+  }
+  if (!headers["content-type"]) {
+    headers["content-type"] = "application/json";
+  }
+  return headers;
 };
 
 app.post("/proxy/models/refresh", async (req, res) => {
@@ -492,16 +553,21 @@ app.post("/v1/chat/completions", async (req, res) => {
     return;
   }
 
-  const authorization = resolveAuthorization(req, config.apiKey);
+  // Build forward body preserving ALL original fields (tools, tool_choice, etc.)
+  const forwardBody: Record<string, unknown> = {
+    ...(req.body as Record<string, unknown>),
+  };
+  if (config.modelOverride.trim()) {
+    forwardBody.model = config.modelOverride.trim();
+  }
+
+  const forwardHeaders = buildForwardHeaders(req, config.apiKey);
 
   try {
     const upstreamResponse = await fetch(upstreamUrl, {
       method: "POST",
-      headers: {
-        "content-type": "application/json",
-        ...(authorization ? { authorization } : {}),
-      },
-      body: JSON.stringify(normalizedInput),
+      headers: forwardHeaders,
+      body: JSON.stringify(forwardBody),
     });
 
     if (normalizedInput.stream) {
@@ -603,6 +669,93 @@ app.post("/v1/chat/completions", async (req, res) => {
         message: "Upstream request failed",
         type: "api_error",
         detail: message,
+      },
+    });
+  }
+});
+
+// --- Transparent proxy for all other /v1/* endpoints in forward mode ---
+app.all("/v1/*", async (req, res) => {
+  const config = getProxyConfig();
+  if (config.mode !== "forward") {
+    res.status(501).json({
+      error: {
+        message:
+          "This endpoint is only available in forward mode. Switch to forward mode in settings.",
+        type: "invalid_request_error",
+      },
+    });
+    return;
+  }
+
+  let upstreamUrl = "";
+  try {
+    upstreamUrl = resolveUpstreamUrl(config.baseUrl, req.path);
+  } catch (error) {
+    res.status(400).json({
+      error: {
+        message: "Invalid upstream config",
+        type: "invalid_request_error",
+        detail:
+          error instanceof Error ? error.message : "invalid upstream url",
+      },
+    });
+    return;
+  }
+
+  // Preserve query string from the original request
+  const qsIndex = req.originalUrl.indexOf("?");
+  if (qsIndex !== -1) {
+    upstreamUrl += req.originalUrl.slice(qsIndex);
+  }
+
+  const forwardHeaders = buildForwardHeaders(req, config.apiKey);
+  const hasBody = !["GET", "HEAD"].includes(req.method);
+
+  try {
+    const upstreamResponse = await fetch(upstreamUrl, {
+      method: req.method,
+      headers: forwardHeaders,
+      ...(hasBody && req.body
+        ? { body: JSON.stringify(req.body) }
+        : {}),
+    });
+
+    res.status(upstreamResponse.status);
+
+    // Forward key response headers
+    for (const key of [
+      "content-type",
+      "x-request-id",
+      "openai-organization",
+      "openai-processing-ms",
+      "openai-version",
+      "x-ratelimit-limit-requests",
+      "x-ratelimit-remaining-requests",
+      "x-ratelimit-limit-tokens",
+      "x-ratelimit-remaining-tokens",
+    ]) {
+      const val = upstreamResponse.headers.get(key);
+      if (val) res.setHeader(key, val);
+    }
+
+    // Stream response body
+    if (upstreamResponse.body) {
+      const reader = upstreamResponse.body.getReader();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value) res.write(Buffer.from(value));
+      }
+    }
+    res.end();
+  } catch (error) {
+    res.status(502).json({
+      error: {
+        message: "Upstream request failed",
+        type: "api_error",
+        detail:
+          error instanceof Error ? error.message : "unknown upstream error",
       },
     });
   }
