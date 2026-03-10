@@ -293,9 +293,7 @@ export const addExchange = (params: {
     record.createdAt,
     record.responseStatus
   );
-  db.prepare(
-    "DELETE FROM exchanges WHERE id NOT IN (SELECT id FROM exchanges ORDER BY created_at DESC, id DESC LIMIT 100)"
-  ).run();
+  // No longer delete old records — allow unlimited accumulation
   emit(record);
   return record;
 };
@@ -341,10 +339,76 @@ export const completeExchange = (
 };
 
 export const getExchanges = () => {
-  const rows = db.prepare("SELECT * FROM exchanges ORDER BY created_at DESC, id DESC LIMIT 100").all() as Array<
+  const rows = db.prepare("SELECT * FROM exchanges ORDER BY created_at DESC, id DESC LIMIT 200").all() as Array<
     Record<string, unknown>
   >;
   return rows.map(mapExchangeRow);
+};
+
+export type PaginatedResult = {
+  items: ExchangeRecord[];
+  nextCursor: string | null;
+  total: number;
+};
+
+export const getExchangesPaginated = (params: {
+  cursor?: string;
+  limit?: number;
+  dateFrom?: string;
+  dateTo?: string;
+  status?: string;
+  search?: string;
+}): PaginatedResult => {
+  const limit = Math.min(Math.max(params.limit ?? 50, 1), 200);
+  const conditions: string[] = [];
+  const args: unknown[] = [];
+
+  if (params.cursor) {
+    // cursor is the created_at of the last item on the current page
+    conditions.push("(created_at < ? OR (created_at = ? AND id < ?))");
+    args.push(params.cursor, params.cursor, params.cursor);
+  }
+  if (params.dateFrom) {
+    conditions.push("created_at >= ?");
+    args.push(params.dateFrom);
+  }
+  if (params.dateTo) {
+    conditions.push("created_at <= ?");
+    args.push(params.dateTo);
+  }
+  if (params.status && params.status !== "all") {
+    conditions.push("response_status = ?");
+    args.push(params.status);
+  }
+  if (params.search) {
+    conditions.push("(prompt LIKE ? OR model LIKE ? OR error_message LIKE ?)");
+    const like = `%${params.search}%`;
+    args.push(like, like, like);
+  }
+
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+
+  // Get total count matching filters (without cursor)
+  const countConditions = conditions.filter((_, i) => {
+    // Skip cursor condition (first condition if cursor was provided)
+    if (params.cursor && i === 0) return false;
+    return true;
+  });
+  const countArgs = params.cursor ? args.slice(3) : [...args];
+  const countWhere = countConditions.length > 0 ? `WHERE ${countConditions.join(" AND ")}` : "";
+  const countRow = db.prepare(`SELECT COUNT(*) AS count FROM exchanges ${countWhere}`).get(...countArgs) as { count: number };
+  const total = Number(countRow.count) || 0;
+
+  const rows = db.prepare(
+    `SELECT * FROM exchanges ${where} ORDER BY created_at DESC, id DESC LIMIT ?`
+  ).all(...args, limit + 1) as Array<Record<string, unknown>>;
+
+  const hasMore = rows.length > limit;
+  const items = (hasMore ? rows.slice(0, limit) : rows).map(mapExchangeRow);
+  const lastItem = items[items.length - 1];
+  const nextCursor = hasMore && lastItem ? lastItem.createdAt : null;
+
+  return { items, nextCursor, total };
 };
 
 export const getExchangeStats = (): ExchangeStats => {

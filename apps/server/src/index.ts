@@ -16,6 +16,7 @@ import {
   deleteExchanges,
   deleteAllExchanges,
   getDashboardState,
+  getExchangesPaginated,
   getModels,
   getProxyConfig,
   setModels,
@@ -37,6 +38,17 @@ if (existsSync(webDistPath)) {
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true });
+});
+
+app.get("/exchanges", (req, res) => {
+  const cursor = typeof req.query.cursor === "string" ? req.query.cursor : undefined;
+  const limit = typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
+  const dateFrom = typeof req.query.dateFrom === "string" ? req.query.dateFrom : undefined;
+  const dateTo = typeof req.query.dateTo === "string" ? req.query.dateTo : undefined;
+  const status = typeof req.query.status === "string" ? req.query.status : undefined;
+  const search = typeof req.query.search === "string" ? req.query.search : undefined;
+  const result = getExchangesPaginated({ cursor, limit, dateFrom, dateTo, status, search });
+  res.json(result);
 });
 
 app.delete("/exchanges", (req, res) => {

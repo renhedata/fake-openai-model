@@ -8,6 +8,7 @@ import {
   Activity,
   ArrowUpDown,
   Bot,
+  Calendar,
   CheckCircle2,
   CheckSquare,
   ChevronDown,
@@ -104,9 +105,15 @@ type UpstreamTestResult = {
   raw: unknown;
 };
 
+type PaginatedResult = {
+  items: ExchangeRecord[];
+  nextCursor: string | null;
+  total: number;
+};
+
 /* ========== helpers ========== */
 
-const PAGE_SIZE = 40;
+const PAGE_SIZE = 50;
 const apiTypeToPath = (t: ApiType) => (t === "responses" ? "/v1/responses" : "/v1/chat/completions");
 const pathToApiType = (p: string): ApiType => (p.includes("/responses") ? "responses" : "chat_completions");
 
@@ -809,7 +816,6 @@ export const App = () => {
   const [dashboard, setDashboard] = useState<DashboardState>(emptyState);
   const [configForm, setConfigForm] = useState<ProxyConfig>(defaultConfig);
   const [connected, setConnected] = useState(false);
-  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
 
   const [isDirty, setIsDirty] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -829,6 +835,18 @@ export const App = () => {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | "success" | "error" | "pending">("all");
+
+  /* date filters */
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [showDateFilter, setShowDateFilter] = useState(false);
+
+  /* paginated exchange list (loaded via REST API) */
+  const [paginatedItems, setPaginatedItems] = useState<ExchangeRecord[]>([]);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [totalCount, setTotalCount] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [initialLoaded, setInitialLoaded] = useState(false);
 
   /* selection */
   const [selectMode, setSelectMode] = useState(false);
@@ -852,7 +870,44 @@ export const App = () => {
   const dirtyRef = useRef(false);
   const lastSavedSignatureRef = useRef(JSON.stringify(defaultConfig));
 
-  /* SSE */
+  /* fetch paginated exchanges from REST API */
+  const fetchExchanges = useCallback(async (cursor?: string) => {
+    const params = new URLSearchParams();
+    params.set("limit", String(PAGE_SIZE));
+    if (cursor) params.set("cursor", cursor);
+    if (dateFrom) {
+      // dateFrom is YYYY-MM-DD, convert to ISO start of day
+      params.set("dateFrom", new Date(dateFrom + "T00:00:00").toISOString());
+    }
+    if (dateTo) {
+      // dateTo is YYYY-MM-DD, convert to ISO end of day
+      params.set("dateTo", new Date(dateTo + "T23:59:59.999").toISOString());
+    }
+    if (statusFilter !== "all") params.set("status", statusFilter);
+    if (searchQuery.trim()) params.set("search", searchQuery.trim());
+
+    const r = await fetch(`/exchanges?${params.toString()}`);
+    if (!r.ok) return null;
+    return (await r.json()) as PaginatedResult;
+  }, [dateFrom, dateTo, statusFilter, searchQuery]);
+
+  /* load initial page */
+  const loadInitialPage = useCallback(async () => {
+    const result = await fetchExchanges();
+    if (result) {
+      setPaginatedItems(result.items);
+      setNextCursor(result.nextCursor);
+      setTotalCount(result.total);
+      setInitialLoaded(true);
+    }
+  }, [fetchExchanges]);
+
+  /* reload when filters change */
+  useEffect(() => {
+    void loadInitialPage();
+  }, [loadInitialPage]);
+
+  /* SSE — updates dashboard stats/config and prepends new exchanges to the paginated list */
   useEffect(() => {
     const es = new EventSource("/events/prompts");
     es.onopen = () => setConnected(true);
@@ -867,14 +922,44 @@ export const App = () => {
           setConfigForm(nc);
           lastSavedSignatureRef.current = JSON.stringify(nc);
         }
+        // If there's a latest exchange update from SSE, merge it into paginatedItems
+        if (data.latest) {
+          const latest = data.latest;
+          setPaginatedItems((prev) => {
+            const idx = prev.findIndex((i) => i.id === latest.id);
+            if (idx >= 0) {
+              // Update existing
+              const next = [...prev];
+              next[idx] = latest;
+              return next;
+            }
+            // Prepend new item (only if not filtered out by date range)
+            if (dateFrom) {
+              const fromDate = new Date(dateFrom + "T00:00:00");
+              if (new Date(latest.createdAt) < fromDate) return prev;
+            }
+            if (dateTo) {
+              const toDate = new Date(dateTo + "T23:59:59.999");
+              if (new Date(latest.createdAt) > toDate) return prev;
+            }
+            return [latest, ...prev];
+          });
+          setTotalCount((prev) => {
+            // If it's a new exchange (not update), increment count
+            const isNew = data.type === "update" && latest.responseStatus === "pending";
+            return isNew ? prev + 1 : prev;
+          });
+        }
       } catch { setConnected(false); }
     };
     return () => { es.close(); setConnected(false); };
-  }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dateFrom, dateTo]);
 
-  /* filter + search */
+  /* apply client-side search/status filter on top of paginated items
+     (server also filters, but SSE-pushed items may need client filtering) */
   const filteredItems = useMemo(() => {
-    let items = dashboard.items;
+    let items = paginatedItems;
     if (statusFilter !== "all") {
       items = items.filter((i) => i.responseStatus === statusFilter);
     }
@@ -889,13 +974,9 @@ export const App = () => {
       );
     }
     return items;
-  }, [dashboard.items, statusFilter, searchQuery]);
+  }, [paginatedItems, statusFilter, searchQuery]);
 
-  const visibleItems = useMemo(() => filteredItems.slice(0, visibleCount), [filteredItems, visibleCount]);
-
-  useEffect(() => {
-    setVisibleCount(PAGE_SIZE);
-  }, [searchQuery, statusFilter]);
+  const visibleItems = filteredItems;
 
   /* compute total completion tokens */
   const totalCompletionTokens = useMemo(
@@ -985,11 +1066,31 @@ export const App = () => {
     finally { setTestingUpstream(false); }
   }, [configForm, readErrorMessage, saveConfig]);
 
+  const loadMore = useCallback(async () => {
+    if (!nextCursor || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const result = await fetchExchanges(nextCursor);
+      if (result) {
+        setPaginatedItems((prev) => {
+          // Deduplicate
+          const existingIds = new Set(prev.map((i) => i.id));
+          const newItems = result.items.filter((i) => !existingIds.has(i.id));
+          return [...prev, ...newItems];
+        });
+        setNextCursor(result.nextCursor);
+        setTotalCount(result.total);
+      }
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [nextCursor, loadingMore, fetchExchanges]);
+
   const onListScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
     const t = e.currentTarget;
     if (t.scrollTop + t.clientHeight < t.scrollHeight - 200) return;
-    setVisibleCount((p) => Math.min(p + PAGE_SIZE, filteredItems.length));
-  }, [filteredItems.length]);
+    void loadMore();
+  }, [loadMore]);
 
   /* selection helpers */
   const onSelectItem = useCallback((id: string, checked: boolean) => {
@@ -1045,12 +1146,22 @@ export const App = () => {
       if (!r.ok) throw new Error("删除失败");
       setSelectedIds(new Set());
       setSelectMode(false);
+      setPaginatedItems([]);
+      setNextCursor(null);
+      setTotalCount(0);
     } catch (e) {
       console.error(e);
     } finally {
       setDeleting(false);
     }
   }, []);
+
+  const clearDateFilter = useCallback(() => {
+    setDateFrom("");
+    setDateTo("");
+  }, []);
+
+  const hasDateFilter = dateFrom || dateTo;
 
   const { stats } = dashboard;
 
@@ -1194,14 +1305,89 @@ export const App = () => {
                 </button>
               ))}
             </div>
+            {/* date filter toggle */}
+            <button
+              type="button"
+              className={`btn btn-ghost btn-xs gap-1 h-6 min-h-0 ${
+                hasDateFilter ? "text-primary" : "text-base-content/40"
+              }`}
+              onClick={() => setShowDateFilter((p) => !p)}
+              title="按日期筛选"
+            >
+              <Calendar size={13} />
+              {hasDateFilter && (
+                <span className="text-[10px]">
+                  {dateFrom && !dateTo ? `${dateFrom} 起` : !dateFrom && dateTo ? `至 ${dateTo}` : dateFrom && dateTo ? `${dateFrom} ~ ${dateTo}` : ""}
+                </span>
+              )}
+            </button>
+            {hasDateFilter && (
+              <button
+                type="button"
+                className="text-[10px] text-error/50 hover:text-error transition-colors"
+                onClick={clearDateFilter}
+                title="清除日期筛选"
+              >
+                <X size={12} />
+              </button>
+            )}
           </>
         )}
         <span className="text-[10px] text-base-content/25 tabular-nums ml-auto">
-          {filteredItems.length === dashboard.items.length
-            ? `${dashboard.items.length} 条`
-            : `${filteredItems.length} / ${dashboard.items.length}`}
+          {initialLoaded ? `${filteredItems.length} / ${totalCount} 条` : `${dashboard.items.length} 条`}
         </span>
       </div>
+
+      {/* ── date filter bar (collapsible) ── */}
+      {showDateFilter && (
+        <div className="shrink-0 flex items-center gap-3 border-b border-base-content/5 bg-base-300/20 px-4 py-2 animate-in slide-in-from-top-1">
+          <Calendar size={13} className="text-base-content/30 shrink-0" />
+          <div className="flex items-center gap-1.5">
+            <label className="text-[10px] text-base-content/40 shrink-0">从</label>
+            <input
+              type="date"
+              className="input input-bordered input-xs bg-base-100 text-xs w-36"
+              value={dateFrom}
+              onChange={(e) => setDateFrom(e.target.value)}
+            />
+          </div>
+          <div className="flex items-center gap-1.5">
+            <label className="text-[10px] text-base-content/40 shrink-0">至</label>
+            <input
+              type="date"
+              className="input input-bordered input-xs bg-base-100 text-xs w-36"
+              value={dateTo}
+              onChange={(e) => setDateTo(e.target.value)}
+            />
+          </div>
+          {/* presets */}
+          <div className="flex items-center gap-1">
+            {([
+              { label: "今天", fn: () => { const d = new Date().toISOString().slice(0, 10); setDateFrom(d); setDateTo(d); } },
+              { label: "近7天", fn: () => { const now = new Date(); const d = new Date(now.getTime() - 7 * 86400000).toISOString().slice(0, 10); setDateFrom(d); setDateTo(now.toISOString().slice(0, 10)); } },
+              { label: "近30天", fn: () => { const now = new Date(); const d = new Date(now.getTime() - 30 * 86400000).toISOString().slice(0, 10); setDateFrom(d); setDateTo(now.toISOString().slice(0, 10)); } },
+            ] as const).map((p) => (
+              <button
+                key={p.label}
+                type="button"
+                className="rounded border border-base-content/10 px-2 py-0.5 text-[10px] text-base-content/50 hover:text-base-content/70 hover:border-base-content/20 transition-colors"
+                onClick={p.fn}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+          {hasDateFilter && (
+            <button
+              type="button"
+              className="text-[10px] text-error/50 hover:text-error transition-colors flex items-center gap-0.5"
+              onClick={clearDateFilter}
+            >
+              <X size={10} /> 清除
+            </button>
+          )}
+        </div>
+      )}
 
       {/* ── exchange list (fills remaining viewport) ── */}
       <div className="flex-1 overflow-y-auto" onScroll={onListScroll}>
@@ -1209,13 +1395,11 @@ export const App = () => {
           {visibleItems.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-base-content/25">
               <Radio size={28} className="mb-2 opacity-30" />
-              <p className="text-sm">{searchQuery || statusFilter !== "all" ? "无匹配记录" : "等待请求中…"}</p>
+              <p className="text-sm">{searchQuery || statusFilter !== "all" || hasDateFilter ? "无匹配记录" : "等待请求中…"}</p>
             </div>
           ) : (
             visibleItems.map((item, idx) => {
-              const serial = statusFilter === "all" && !searchQuery
-                ? dashboard.items.length - idx
-                : filteredItems.length - idx;
+              const serial = totalCount - idx;
               return (
                 <ExchangeRow
                   key={item.id}
@@ -1230,10 +1414,18 @@ export const App = () => {
               );
             })
           )}
-          {visibleItems.length < filteredItems.length && (
+          {nextCursor && (
             <div className="flex justify-center py-2">
-              <button className="btn btn-ghost btn-sm gap-1.5 text-xs" onClick={() => setVisibleCount((p) => Math.min(p + PAGE_SIZE, filteredItems.length))}>
-                <ChevronDown size={12} /> 加载更多 ({filteredItems.length - visibleItems.length})
+              <button
+                className="btn btn-ghost btn-sm gap-1.5 text-xs"
+                onClick={() => void loadMore()}
+                disabled={loadingMore}
+              >
+                {loadingMore ? (
+                  <><Loader2 size={12} className="animate-spin" /> 加载中…</>
+                ) : (
+                  <><ChevronDown size={12} /> 加载更多 ({totalCount - paginatedItems.length > 0 ? totalCount - paginatedItems.length : "..."} 条)</>
+                )}
               </button>
             </div>
           )}
