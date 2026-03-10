@@ -156,6 +156,17 @@ const migrations: Migration[] = [
       );
       `);
     }
+  },
+  {
+    version: 2,
+    up: (database) => {
+      // Optimize: add indexes for commonly queried columns
+      database.exec(`
+        CREATE INDEX IF NOT EXISTS idx_exchanges_created_at ON exchanges (created_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_exchanges_status ON exchanges (response_status);
+        CREATE INDEX IF NOT EXISTS idx_exchanges_model ON exchanges (model);
+      `);
+    }
   }
 ];
 

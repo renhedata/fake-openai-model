@@ -1,8 +1,9 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
-import "github-markdown-css/github-markdown.css";
+import "github-markdown-css/github-markdown-dark.css";
 import "highlight.js/styles/github-dark-dimmed.css";
+import "./markdown-light.css";
 import "./index.css";
 
 /* Apply saved theme or system preference before first paint */

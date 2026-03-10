@@ -12,6 +12,7 @@ import {
   CheckCircle2,
   CheckSquare,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   Clock,
   Cpu,
@@ -268,8 +269,8 @@ const truncate = (s: string, n = 120) => (s.length <= n ? s : `${s.slice(0, n)}�
 /* ========== atoms ========== */
 
 const StatusDot = ({ ok, label }: { ok: boolean; label: string }) => (
-  <span className={`inline-flex items-center gap-1.5 text-[11px] font-medium ${ok ? "text-success" : "text-error"}`}>
-    <span className={`h-1.5 w-1.5 rounded-full ${ok ? "bg-success animate-pulse" : "bg-error"}`} />
+  <span className={`inline-flex items-center gap-1.5 text-[11px] font-medium transition-colors duration-300 ${ok ? "text-success" : "text-error"}`}>
+    <span className={`h-1.5 w-1.5 rounded-full transition-colors duration-300 ${ok ? "bg-success animate-live-pulse" : "bg-error"}`} />
     {label}
   </span>
 );
@@ -282,7 +283,7 @@ const Badge = ({ children, variant = "default" }: { children: React.ReactNode; v
     info: "bg-info/15 text-info border-info/20",
     default: "bg-base-content/5 text-base-content/60 border-base-content/10"
   };
-  return <span className={`inline-flex items-center gap-1 rounded border px-1.5 py-px text-[10px] font-medium leading-tight ${cls[variant]}`}>{children}</span>;
+  return <span className={`inline-flex items-center gap-1 rounded border px-1.5 py-px text-[10px] font-medium leading-tight transition-all duration-200 ${cls[variant]}`}>{children}</span>;
 };
 
 const CopyButton = ({ text }: { text: string }) => {
@@ -300,8 +301,11 @@ const CopyButton = ({ text }: { text: string }) => {
   );
 };
 
-const StatMini = ({ icon: Icon, label, value }: { icon: LucideIcon; label: string; value: number | string }) => (
-  <div className="flex items-center gap-2 rounded-lg border border-base-content/5 bg-base-100 px-3 py-2">
+const StatMini = ({ icon: Icon, label, value, delay = 0 }: { icon: LucideIcon; label: string; value: number | string; delay?: number }) => (
+  <div
+    className="flex items-center gap-2 rounded-lg border border-base-content/5 bg-base-100 px-3 py-2 animate-stat-reveal hover:border-base-content/10 hover:shadow-sm transition-all duration-200"
+    style={{ animationDelay: `${delay}ms` }}
+  >
     <Icon size={14} className="text-base-content/30 shrink-0" />
     <div className="min-w-0">
       <div className="text-[10px] uppercase tracking-wider text-base-content/40">{label}</div>
@@ -453,7 +457,7 @@ const ExchangeRow = memo(function ExchangeRow({
   const statusVariant = item.responseStatus === "success" ? "success" : item.responseStatus === "error" ? "error" : "warning";
 
   return (
-    <div className={`rounded-lg border transition-all ${selected ? "border-primary/40 bg-primary/[0.03]" : expanded ? "border-primary/30 bg-base-100 shadow-lg shadow-primary/5" : "border-base-content/5 bg-base-100 hover:border-base-content/10"}`}>
+    <div className={`rounded-lg border transition-all duration-200 ${selected ? "border-primary/40 bg-primary/[0.03]" : expanded ? "border-primary/30 bg-base-100 shadow-lg shadow-primary/5" : "border-base-content/5 bg-base-100 hover:border-base-content/10 hover:shadow-sm"}`}>
       {/* clickable summary row */}
       <div className="flex w-full items-center gap-2 px-3 py-2">
         {/* checkbox */}
@@ -519,7 +523,7 @@ const ExchangeRow = memo(function ExchangeRow({
 
       {/* expanded detail (inline, no modal) */}
       {expanded && (
-        <div className="border-t border-base-content/5">
+        <div className="border-t border-base-content/5 animate-expand-in">
           {/* meta */}
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-2 text-[11px] text-base-content/40">
             <span>ID: <span className="mono">{item.id}</span></span>
@@ -812,6 +816,315 @@ const SettingsDrawer = memo(function SettingsDrawer({
 
 /* ========== App ========== */
 
+/* ========== DatePicker Dropdown ========== */
+
+const WEEKDAYS = ["\u65e5", "\u4e00", "\u4e8c", "\u4e09", "\u56db", "\u4e94", "\u516d"];
+
+/** pad to 2 digits */
+const p2 = (n: number) => String(n).padStart(2, "0");
+/** Date → YYYY-MM-DD */
+const toDateStr = (d: Date) => `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
+
+interface DatePickerDropdownProps {
+  dateFrom: string;
+  dateTo: string;
+  setDateFrom: (v: string) => void;
+  setDateTo: (v: string) => void;
+  presets: { label: string; from: string; to: string }[];
+  activePresetLabel: string | null;
+  applyPreset: (from: string, to: string) => void;
+  clearDateFilter: () => void;
+  close: () => void;
+  hasDateFilter: boolean;
+}
+
+const DatePickerDropdown = ({
+  dateFrom, dateTo, setDateFrom, setDateTo,
+  presets, activePresetLabel, applyPreset, clearDateFilter, close, hasDateFilter,
+}: DatePickerDropdownProps) => {
+  // Calendar state
+  const today = useMemo(() => new Date(), []);
+  const todayStr = useMemo(() => toDateStr(today), [today]);
+  const [viewYear, setViewYear] = useState(() => {
+    if (dateFrom) { const [y] = dateFrom.split("-"); return Number(y); }
+    return today.getFullYear();
+  });
+  const [viewMonth, setViewMonth] = useState(() => {
+    if (dateFrom) { const parts = dateFrom.split("-"); return Number(parts[1]) - 1; }
+    return today.getMonth();
+  });
+
+  // Selection state: "idle" | "picking" (one date already clicked, waiting for second)
+  const [pickStart, setPickStart] = useState<string | null>(null);
+  const [hoverDate, setHoverDate] = useState<string | null>(null);
+
+  const prevMonth = useCallback(() => {
+    setViewMonth((m) => { if (m === 0) { setViewYear((y) => y - 1); return 11; } return m - 1; });
+  }, []);
+  const nextMonth = useCallback(() => {
+    setViewMonth((m) => { if (m === 11) { setViewYear((y) => y + 1); return 0; } return m + 1; });
+  }, []);
+
+  // Build calendar grid for current view month
+  const calendarDays = useMemo(() => {
+    const firstDay = new Date(viewYear, viewMonth, 1);
+    const startDow = firstDay.getDay(); // 0=Sun
+    const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
+
+    const cells: { date: string; day: number; inMonth: boolean }[] = [];
+
+    // Previous month fill
+    if (startDow > 0) {
+      const prevMonthDays = new Date(viewYear, viewMonth, 0).getDate();
+      for (let i = startDow - 1; i >= 0; i--) {
+        const d = prevMonthDays - i;
+        const m = viewMonth === 0 ? 11 : viewMonth - 1;
+        const y = viewMonth === 0 ? viewYear - 1 : viewYear;
+        cells.push({ date: `${y}-${p2(m + 1)}-${p2(d)}`, day: d, inMonth: false });
+      }
+    }
+
+    // Current month
+    for (let d = 1; d <= daysInMonth; d++) {
+      cells.push({ date: `${viewYear}-${p2(viewMonth + 1)}-${p2(d)}`, day: d, inMonth: true });
+    }
+
+    // Next month fill (up to 42 cells = 6 rows)
+    const remaining = 42 - cells.length;
+    for (let d = 1; d <= remaining; d++) {
+      const m = viewMonth === 11 ? 0 : viewMonth + 1;
+      const y = viewMonth === 11 ? viewYear + 1 : viewYear;
+      cells.push({ date: `${y}-${p2(m + 1)}-${p2(d)}`, day: d, inMonth: false });
+    }
+    return cells;
+  }, [viewYear, viewMonth]);
+
+  const handleDayClick = useCallback((dateStr: string) => {
+    if (!pickStart) {
+      // First click — start picking
+      setPickStart(dateStr);
+      setDateFrom(dateStr);
+      setDateTo(dateStr);
+    } else {
+      // Second click — set range
+      if (dateStr < pickStart) {
+        setDateFrom(dateStr);
+        setDateTo(pickStart);
+      } else {
+        setDateFrom(pickStart);
+        setDateTo(dateStr);
+      }
+      setPickStart(null);
+      setHoverDate(null);
+    }
+  }, [pickStart, setDateFrom, setDateTo]);
+
+  // Compute visual range (inclusive) for highlighting
+  const rangeStart = useMemo(() => {
+    if (pickStart && hoverDate) return pickStart < hoverDate ? pickStart : hoverDate;
+    return dateFrom || null;
+  }, [pickStart, hoverDate, dateFrom]);
+
+  const rangeEnd = useMemo(() => {
+    if (pickStart && hoverDate) return pickStart > hoverDate ? pickStart : hoverDate;
+    return dateTo || null;
+  }, [pickStart, hoverDate, dateTo]);
+
+  const isInRange = useCallback((d: string) => {
+    if (!rangeStart || !rangeEnd) return false;
+    return d >= rangeStart && d <= rangeEnd;
+  }, [rangeStart, rangeEnd]);
+
+  const isRangeStart = useCallback((d: string) => d === rangeStart, [rangeStart]);
+  const isRangeEnd = useCallback((d: string) => d === rangeEnd, [rangeEnd]);
+
+  const monthLabel = `${viewYear} \u5e74 ${viewMonth + 1} \u6708`;
+
+  const formatLabel = (d: string) => {
+    const parts = d.split("-");
+    return `${parts[1]}/${parts[2]}`;
+  };
+
+  return (
+    <div className="absolute left-0 top-full mt-1.5 z-50 rounded-xl border border-base-content/10 bg-base-100 shadow-xl shadow-base-content/5 animate-fade-slide-in w-[300px]">
+      {/* presets row */}
+      <div className="px-3 pt-3 pb-2 border-b border-base-content/5">
+        <div className="flex flex-wrap gap-1">
+          {presets.map((p) => {
+            const isActive = dateFrom === p.from && dateTo === p.to && !pickStart;
+            return (
+              <button
+                key={p.label}
+                type="button"
+                className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-all duration-150 ${
+                  isActive
+                    ? "bg-primary text-primary-content shadow-sm"
+                    : "text-base-content/55 hover:bg-base-content/5 hover:text-base-content/80"
+                }`}
+                onClick={() => {
+                  applyPreset(p.from, p.to);
+                  setPickStart(null);
+                  setHoverDate(null);
+                  // Navigate calendar to the preset's start month
+                  const [y, m] = p.from.split("-");
+                  setViewYear(Number(y));
+                  setViewMonth(Number(m) - 1);
+                }}
+              >
+                {p.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* calendar */}
+      <div className="p-3">
+        {/* month nav */}
+        <div className="flex items-center justify-between mb-2">
+          <button
+            type="button"
+            className="p-1 rounded-md text-base-content/40 hover:text-base-content/70 hover:bg-base-content/5 transition-colors"
+            onClick={prevMonth}
+          >
+            <ChevronLeft size={14} />
+          </button>
+          <span className="text-xs font-semibold text-base-content/70 select-none">
+            {monthLabel}
+          </span>
+          <button
+            type="button"
+            className="p-1 rounded-md text-base-content/40 hover:text-base-content/70 hover:bg-base-content/5 transition-colors"
+            onClick={nextMonth}
+          >
+            <ChevronRight size={14} />
+          </button>
+        </div>
+
+        {/* weekday headers */}
+        <div className="grid grid-cols-7 mb-0.5">
+          {WEEKDAYS.map((w) => (
+            <div key={w} className="text-center text-[9px] font-medium text-base-content/30 py-0.5 select-none">
+              {w}
+            </div>
+          ))}
+        </div>
+
+        {/* day grid */}
+        <div className="grid grid-cols-7">
+          {calendarDays.map((cell, i) => {
+            const inRange = isInRange(cell.date);
+            const isStart = isRangeStart(cell.date);
+            const isEnd = isRangeEnd(cell.date);
+            const isToday = cell.date === todayStr;
+            const isSingleDay = isStart && isEnd;
+            const isPicking = !!pickStart;
+
+            return (
+              <div
+                key={i}
+                className={`relative flex items-center justify-center ${
+                  // Range background band
+                  inRange && !isSingleDay
+                    ? isStart
+                      ? "bg-primary/10 rounded-l-md"
+                      : isEnd
+                        ? "bg-primary/10 rounded-r-md"
+                        : "bg-primary/10"
+                    : ""
+                }`}
+              >
+                <button
+                  type="button"
+                  className={`
+                    relative z-10 w-8 h-7 rounded-md text-[11px] font-medium transition-all duration-100 select-none
+                    ${!cell.inMonth ? "text-base-content/15" : ""}
+                    ${cell.inMonth && !inRange ? "text-base-content/70 hover:bg-base-content/8 hover:text-base-content" : ""}
+                    ${inRange && !isStart && !isEnd ? "text-primary/80" : ""}
+                    ${(isStart || isEnd) ? "bg-primary text-primary-content shadow-sm" : ""}
+                    ${isToday && !isStart && !isEnd ? "ring-1 ring-primary/30 ring-inset" : ""}
+                    ${isPicking ? "cursor-crosshair" : "cursor-pointer"}
+                  `}
+                  onClick={() => handleDayClick(cell.date)}
+                  onMouseEnter={() => { if (pickStart) setHoverDate(cell.date); }}
+                  onMouseLeave={() => { if (pickStart) setHoverDate(null); }}
+                >
+                  {cell.day}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* footer */}
+      <div className="border-t border-base-content/5 px-3 py-2 flex items-center justify-between">
+        {hasDateFilter && !pickStart ? (
+          <>
+            <button
+              type="button"
+              className="text-[10px] text-error/60 hover:text-error transition-colors flex items-center gap-0.5 px-1.5 py-0.5 rounded hover:bg-error/5"
+              onClick={() => { clearDateFilter(); close(); }}
+            >
+              <X size={9} /> 清除
+            </button>
+            <span className="text-[10px] text-base-content/30 tabular-nums">
+              {dateFrom && dateTo
+                ? dateFrom === dateTo
+                  ? formatLabel(dateFrom)
+                  : `${formatLabel(dateFrom)} → ${formatLabel(dateTo)}`
+                : dateFrom
+                  ? `${formatLabel(dateFrom)} 起`
+                  : `至 ${formatLabel(dateTo)}`}
+            </span>
+          </>
+        ) : pickStart ? (
+          <span className="text-[10px] text-primary/60 animate-live-pulse">
+            点击第二个日期完成选择…
+          </span>
+        ) : (
+          <span className="text-[10px] text-base-content/25">
+            点击日期开始选择范围
+          </span>
+        )}
+      </div>
+    </div>
+  );
+};
+
+/* ========== Connection Toast ========== */
+
+const ConnectionToast = ({ connected }: { connected: boolean }) => {
+  const [show, setShow] = useState(false);
+  const [wasConnected, setWasConnected] = useState(true);
+
+  useEffect(() => {
+    if (!connected && wasConnected) {
+      setShow(true);
+    } else if (connected && !wasConnected) {
+      setShow(true);
+      const t = setTimeout(() => setShow(false), 2500);
+      return () => clearTimeout(t);
+    }
+    setWasConnected(connected);
+  }, [connected, wasConnected]);
+
+  if (!show) return null;
+
+  return (
+    <div className="fixed top-3 left-1/2 -translate-x-1/2 z-[100] animate-toast-in">
+      <div className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-medium shadow-lg backdrop-blur-sm ${
+        connected
+          ? "border-success/30 bg-success/10 text-success"
+          : "border-error/30 bg-error/10 text-error"
+      }`}>
+        <span className={`h-1.5 w-1.5 rounded-full ${connected ? "bg-success" : "bg-error animate-live-pulse"}`} />
+        {connected ? "已重新连接" : "连接已断开，正在重连…"}
+      </div>
+    </div>
+  );
+};
+
 export const App = () => {
   const [dashboard, setDashboard] = useState<DashboardState>(emptyState);
   const [configForm, setConfigForm] = useState<ProxyConfig>(defaultConfig);
@@ -834,12 +1147,12 @@ export const App = () => {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [searchInput, setSearchInput] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | "success" | "error" | "pending">("all");
 
   /* date filters */
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
-  const [showDateFilter, setShowDateFilter] = useState(false);
 
   /* paginated exchange list (loaded via REST API) */
   const [paginatedItems, setPaginatedItems] = useState<ExchangeRecord[]>([]);
@@ -907,52 +1220,90 @@ export const App = () => {
     void loadInitialPage();
   }, [loadInitialPage]);
 
-  /* SSE — updates dashboard stats/config and prepends new exchanges to the paginated list */
+  /* debounce search input → searchQuery (optimize: reduce re-renders during typing) */
   useEffect(() => {
-    const es = new EventSource("/events/prompts");
-    es.onopen = () => setConnected(true);
-    es.onerror = () => setConnected(false);
-    es.onmessage = (ev) => {
-      try {
-        const data = JSON.parse(ev.data) as DashboardEvent;
-        const ns = data.state ?? emptyState;
-        const nc = normalizeConfig(ns.config);
-        setDashboard({ ...ns, config: nc });
-        if (!dirtyRef.current) {
-          setConfigForm(nc);
-          lastSavedSignatureRef.current = JSON.stringify(nc);
+    const t = setTimeout(() => setSearchQuery(searchInput), 300);
+    return () => clearTimeout(t);
+  }, [searchInput]);
+
+  /* SSE — updates dashboard stats/config and prepends new exchanges to the paginated list.
+     Includes automatic reconnection with exponential backoff (harden skill). */
+  useEffect(() => {
+    let es: EventSource | null = null;
+    let retryCount = 0;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let disposed = false;
+
+    const connect = () => {
+      if (disposed) return;
+      es = new EventSource("/events/prompts");
+
+      es.onopen = () => {
+        setConnected(true);
+        retryCount = 0; // reset backoff on successful connect
+      };
+
+      es.onerror = () => {
+        setConnected(false);
+        es?.close();
+        if (!disposed) {
+          // Exponential backoff: 1s, 2s, 4s, 8s, max 30s
+          const delay = Math.min(1000 * Math.pow(2, retryCount), 30000);
+          retryCount++;
+          retryTimer = setTimeout(connect, delay);
         }
-        // If there's a latest exchange update from SSE, merge it into paginatedItems
-        if (data.latest) {
-          const latest = data.latest;
-          setPaginatedItems((prev) => {
-            const idx = prev.findIndex((i) => i.id === latest.id);
-            if (idx >= 0) {
-              // Update existing
-              const next = [...prev];
-              next[idx] = latest;
-              return next;
-            }
-            // Prepend new item (only if not filtered out by date range)
-            if (dateFrom) {
-              const fromDate = new Date(dateFrom + "T00:00:00");
-              if (new Date(latest.createdAt) < fromDate) return prev;
-            }
-            if (dateTo) {
-              const toDate = new Date(dateTo + "T23:59:59.999");
-              if (new Date(latest.createdAt) > toDate) return prev;
-            }
-            return [latest, ...prev];
-          });
-          setTotalCount((prev) => {
-            // If it's a new exchange (not update), increment count
-            const isNew = data.type === "update" && latest.responseStatus === "pending";
-            return isNew ? prev + 1 : prev;
-          });
-        }
-      } catch { setConnected(false); }
+      };
+
+      es.onmessage = (ev) => {
+        try {
+          const data = JSON.parse(ev.data) as DashboardEvent;
+          const ns = data.state ?? emptyState;
+          const nc = normalizeConfig(ns.config);
+          setDashboard({ ...ns, config: nc });
+          if (!dirtyRef.current) {
+            setConfigForm(nc);
+            lastSavedSignatureRef.current = JSON.stringify(nc);
+          }
+          // If there's a latest exchange update from SSE, merge it into paginatedItems
+          if (data.latest) {
+            const latest = data.latest;
+            setPaginatedItems((prev) => {
+              const idx = prev.findIndex((i) => i.id === latest.id);
+              if (idx >= 0) {
+                // Update existing
+                const next = [...prev];
+                next[idx] = latest;
+                return next;
+              }
+              // Prepend new item (only if not filtered out by date range)
+              if (dateFrom) {
+                const fromDate = new Date(dateFrom + "T00:00:00");
+                if (new Date(latest.createdAt) < fromDate) return prev;
+              }
+              if (dateTo) {
+                const toDate = new Date(dateTo + "T23:59:59.999");
+                if (new Date(latest.createdAt) > toDate) return prev;
+              }
+              return [latest, ...prev];
+            });
+            setTotalCount((prev) => {
+              // If it's a new exchange (not update), increment count
+              const isNew = data.type === "update" && latest.responseStatus === "pending";
+              return isNew ? prev + 1 : prev;
+            });
+          }
+        } catch { /* ignore parse errors */ }
+      };
     };
-    return () => { es.close(); setConnected(false); };
+
+    connect();
+
+    return () => {
+      disposed = true;
+      if (retryTimer) clearTimeout(retryTimer);
+      es?.close();
+      setConnected(false);
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dateFrom, dateTo]);
 
@@ -1163,10 +1514,77 @@ export const App = () => {
 
   const hasDateFilter = dateFrom || dateTo;
 
+  /* date filter dropdown */
+  const [dateDropdownOpen, setDateDropdownOpen] = useState(false);
+  const dateDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close dropdown on click outside
+  useEffect(() => {
+    if (!dateDropdownOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (dateDropdownRef.current && !dateDropdownRef.current.contains(e.target as Node)) {
+        setDateDropdownOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [dateDropdownOpen]);
+
+  // Close on Escape
+  useEffect(() => {
+    if (!dateDropdownOpen) return;
+    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") setDateDropdownOpen(false); };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [dateDropdownOpen]);
+
+  const todayStr = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const yesterdayStr = useMemo(() => {
+    const d = new Date(); d.setDate(d.getDate() - 1);
+    return d.toISOString().slice(0, 10);
+  }, []);
+
+  const datePresets = useMemo(() => [
+    { label: "今天", from: todayStr, to: todayStr },
+    { label: "昨天", from: yesterdayStr, to: yesterdayStr },
+    { label: "近 3 天", from: (() => { const d = new Date(); d.setDate(d.getDate() - 2); return d.toISOString().slice(0, 10); })(), to: todayStr },
+    { label: "近 7 天", from: (() => { const d = new Date(); d.setDate(d.getDate() - 6); return d.toISOString().slice(0, 10); })(), to: todayStr },
+    { label: "近 30 天", from: (() => { const d = new Date(); d.setDate(d.getDate() - 29); return d.toISOString().slice(0, 10); })(), to: todayStr },
+  ], [todayStr, yesterdayStr]);
+
+  const activePresetLabel = useMemo(() => {
+    if (!dateFrom && !dateTo) return null;
+    const match = datePresets.find(p => p.from === dateFrom && p.to === dateTo);
+    return match?.label ?? null;
+  }, [dateFrom, dateTo, datePresets]);
+
+  const applyPreset = useCallback((from: string, to: string) => {
+    setDateFrom(from);
+    setDateTo(to);
+  }, []);
+
+  const formatDateLabel = useCallback((d: string) => {
+    if (!d) return "";
+    // Convert YYYY-MM-DD to more readable MM/DD
+    const parts = d.split("-");
+    return `${parts[1]}/${parts[2]}`;
+  }, []);
+
+  const dateFilterLabel = useMemo(() => {
+    if (activePresetLabel) return activePresetLabel;
+    if (dateFrom && dateTo) return `${formatDateLabel(dateFrom)} ~ ${formatDateLabel(dateTo)}`;
+    if (dateFrom) return `${formatDateLabel(dateFrom)} 起`;
+    if (dateTo) return `至 ${formatDateLabel(dateTo)}`;
+    return null;
+  }, [activePresetLabel, dateFrom, dateTo, formatDateLabel]);
+
   const { stats } = dashboard;
 
   return (
     <div className="flex h-screen flex-col overflow-hidden">
+      {/* ── connection toast ── */}
+      <ConnectionToast connected={connected} />
+
       {/* ── top bar ── */}
       <header className="z-30 flex shrink-0 items-center justify-between border-b border-base-content/5 bg-base-300 px-4 py-2">
         <div className="flex items-center gap-3">
@@ -1206,12 +1624,12 @@ export const App = () => {
 
       {/* ── stats row (mobile visible) ── */}
       <div className="shrink-0 grid grid-cols-2 gap-2 border-b border-base-content/5 bg-base-300/50 px-4 py-2 sm:grid-cols-4 lg:grid-cols-6">
-        <StatMini icon={Activity} label="请求" value={stats.totalRequests} />
-        <StatMini icon={Send} label="入 Tokens" value={stats.totalPromptTokens.toLocaleString()} />
-        <StatMini icon={Zap} label="出 Tokens" value={totalCompletionTokens.toLocaleString()} />
-        <StatMini icon={Coins} label="总 Tokens" value={(stats.totalPromptTokens + totalCompletionTokens).toLocaleString()} />
-        <StatMini icon={ArrowUpDown} label="转发" value={stats.totalForwarded} />
-        <StatMini icon={Shield} label="捕获" value={stats.totalCaptureOnly} />
+        <StatMini icon={Activity} label="请求" value={stats.totalRequests} delay={0} />
+        <StatMini icon={Send} label="入 Tokens" value={stats.totalPromptTokens.toLocaleString()} delay={50} />
+        <StatMini icon={Zap} label="出 Tokens" value={totalCompletionTokens.toLocaleString()} delay={100} />
+        <StatMini icon={Coins} label="总 Tokens" value={(stats.totalPromptTokens + totalCompletionTokens).toLocaleString()} delay={150} />
+        <StatMini icon={ArrowUpDown} label="转发" value={stats.totalForwarded} delay={200} />
+        <StatMini icon={Shield} label="捕获" value={stats.totalCaptureOnly} delay={250} />
       </div>
 
       {/* ── search + filter bar ── */}
@@ -1273,15 +1691,15 @@ export const App = () => {
             <div className="relative flex-1 max-w-md">
               <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-base-content/30" />
               <input
-                className="input input-bordered input-sm w-full bg-base-100 pl-8 text-xs"
+                className="input input-bordered input-sm w-full bg-base-100 pl-8 text-xs transition-shadow duration-200 focus:shadow-md focus:shadow-primary/5"
                 placeholder="搜索 prompt, model, response …"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
               />
-              {searchQuery && (
+              {searchInput && (
                 <button
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-base-content/30 hover:text-base-content/60"
-                  onClick={() => setSearchQuery("")}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-base-content/30 hover:text-base-content/60 transition-colors duration-150"
+                  onClick={() => { setSearchInput(""); setSearchQuery(""); }}
                   type="button"
                 >
                   <X size={12} />
@@ -1305,32 +1723,50 @@ export const App = () => {
                 </button>
               ))}
             </div>
-            {/* date filter toggle */}
-            <button
-              type="button"
-              className={`btn btn-ghost btn-xs gap-1 h-6 min-h-0 ${
-                hasDateFilter ? "text-primary" : "text-base-content/40"
-              }`}
-              onClick={() => setShowDateFilter((p) => !p)}
-              title="按日期筛选"
-            >
-              <Calendar size={13} />
-              {hasDateFilter && (
-                <span className="text-[10px]">
-                  {dateFrom && !dateTo ? `${dateFrom} 起` : !dateFrom && dateTo ? `至 ${dateTo}` : dateFrom && dateTo ? `${dateFrom} ~ ${dateTo}` : ""}
-                </span>
-              )}
-            </button>
-            {hasDateFilter && (
+            {/* date filter dropdown */}
+            <div className="relative" ref={dateDropdownRef}>
               <button
                 type="button"
-                className="text-[10px] text-error/50 hover:text-error transition-colors"
-                onClick={clearDateFilter}
-                title="清除日期筛选"
+                className={`flex items-center gap-1 rounded-md border px-2 py-0.5 text-[10px] font-medium transition-all duration-200 ${
+                  hasDateFilter
+                    ? "border-primary/30 bg-primary/10 text-primary shadow-sm shadow-primary/5"
+                    : dateDropdownOpen
+                      ? "border-base-content/20 bg-base-content/5 text-base-content/60"
+                      : "border-base-content/10 text-base-content/40 hover:text-base-content/60 hover:border-base-content/20"
+                }`}
+                onClick={() => setDateDropdownOpen((p) => !p)}
+                title="按日期筛选"
               >
-                <X size={12} />
+                <Calendar size={11} />
+                <span>{dateFilterLabel ?? "日期"}</span>
+                {hasDateFilter && (
+                  <span
+                    className="ml-0.5 rounded-full hover:bg-primary/20 p-0.5 transition-colors"
+                    onClick={(e) => { e.stopPropagation(); clearDateFilter(); }}
+                    title="清除日期筛选"
+                  >
+                    <X size={9} />
+                  </span>
+                )}
+                {!hasDateFilter && <ChevronDown size={9} className={`transition-transform duration-200 ${dateDropdownOpen ? "rotate-180" : ""}`} />}
               </button>
-            )}
+
+              {/* dropdown panel */}
+              {dateDropdownOpen && (
+                <DatePickerDropdown
+                  dateFrom={dateFrom}
+                  dateTo={dateTo}
+                  setDateFrom={setDateFrom}
+                  setDateTo={setDateTo}
+                  presets={datePresets}
+                  activePresetLabel={activePresetLabel}
+                  applyPreset={applyPreset}
+                  clearDateFilter={clearDateFilter}
+                  close={() => setDateDropdownOpen(false)}
+                  hasDateFilter={!!hasDateFilter}
+                />
+              )}
+            </div>
           </>
         )}
         <span className="text-[10px] text-base-content/25 tabular-nums ml-auto">
@@ -1338,79 +1774,36 @@ export const App = () => {
         </span>
       </div>
 
-      {/* ── date filter bar (collapsible) ── */}
-      {showDateFilter && (
-        <div className="shrink-0 flex items-center gap-3 border-b border-base-content/5 bg-base-300/20 px-4 py-2 animate-in slide-in-from-top-1">
-          <Calendar size={13} className="text-base-content/30 shrink-0" />
-          <div className="flex items-center gap-1.5">
-            <label className="text-[10px] text-base-content/40 shrink-0">从</label>
-            <input
-              type="date"
-              className="input input-bordered input-xs bg-base-100 text-xs w-36"
-              value={dateFrom}
-              onChange={(e) => setDateFrom(e.target.value)}
-            />
-          </div>
-          <div className="flex items-center gap-1.5">
-            <label className="text-[10px] text-base-content/40 shrink-0">至</label>
-            <input
-              type="date"
-              className="input input-bordered input-xs bg-base-100 text-xs w-36"
-              value={dateTo}
-              onChange={(e) => setDateTo(e.target.value)}
-            />
-          </div>
-          {/* presets */}
-          <div className="flex items-center gap-1">
-            {([
-              { label: "今天", fn: () => { const d = new Date().toISOString().slice(0, 10); setDateFrom(d); setDateTo(d); } },
-              { label: "近7天", fn: () => { const now = new Date(); const d = new Date(now.getTime() - 7 * 86400000).toISOString().slice(0, 10); setDateFrom(d); setDateTo(now.toISOString().slice(0, 10)); } },
-              { label: "近30天", fn: () => { const now = new Date(); const d = new Date(now.getTime() - 30 * 86400000).toISOString().slice(0, 10); setDateFrom(d); setDateTo(now.toISOString().slice(0, 10)); } },
-            ] as const).map((p) => (
-              <button
-                key={p.label}
-                type="button"
-                className="rounded border border-base-content/10 px-2 py-0.5 text-[10px] text-base-content/50 hover:text-base-content/70 hover:border-base-content/20 transition-colors"
-                onClick={p.fn}
-              >
-                {p.label}
-              </button>
-            ))}
-          </div>
-          {hasDateFilter && (
-            <button
-              type="button"
-              className="text-[10px] text-error/50 hover:text-error transition-colors flex items-center gap-0.5"
-              onClick={clearDateFilter}
-            >
-              <X size={10} /> 清除
-            </button>
-          )}
-        </div>
-      )}
-
       {/* ── exchange list (fills remaining viewport) ── */}
       <div className="flex-1 overflow-y-auto" onScroll={onListScroll}>
         <div className="mx-auto max-w-[1600px] space-y-1 p-3">
           {visibleItems.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-16 text-base-content/25">
+            <div className="flex flex-col items-center justify-center py-16 text-base-content/25 animate-fade-slide-in">
               <Radio size={28} className="mb-2 opacity-30" />
               <p className="text-sm">{searchQuery || statusFilter !== "all" || hasDateFilter ? "无匹配记录" : "等待请求中…"}</p>
+              {!searchQuery && statusFilter === "all" && !hasDateFilter && (
+                <p className="mt-1 text-xs text-base-content/15">发送一个 API 请求到代理端点开始使用</p>
+              )}
             </div>
           ) : (
             visibleItems.map((item, idx) => {
               const serial = totalCount - idx;
               return (
-                <ExchangeRow
+                <div
                   key={item.id}
-                  item={item}
-                  serial={serial}
-                  expanded={expandedId === item.id}
-                  onToggle={() => setExpandedId((p) => (p === item.id ? null : item.id))}
-                  selectMode={selectMode}
-                  selected={selectedIds.has(item.id)}
-                  onSelect={onSelectItem}
-                />
+                  className="animate-fade-slide-in"
+                  style={{ animationDelay: `${Math.min(idx * 30, 300)}ms` }}
+                >
+                  <ExchangeRow
+                    item={item}
+                    serial={serial}
+                    expanded={expandedId === item.id}
+                    onToggle={() => setExpandedId((p) => (p === item.id ? null : item.id))}
+                    selectMode={selectMode}
+                    selected={selectedIds.has(item.id)}
+                    onSelect={onSelectItem}
+                  />
+                </div>
               );
             })
           )}

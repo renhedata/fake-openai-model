@@ -1,0 +1,218 @@
+/*
+ * Light-theme overrides for github-markdown-css and highlight.js
+ *
+ * Since github-markdown-dark.css hardcodes dark colors on `.markdown-body`,
+ * and highlight.js/github-dark-dimmed.css hardcodes on `.hljs`,
+ * we scope the light palette under [data-theme="light"] to override both.
+ */
+
+/* ═══════════════════════════════════════════════
+   github-markdown-css light palette
+   (values taken from github-markdown-light.css)
+   ═══════════════════════════════════════════════ */
+
+[data-theme="light"] .markdown-body {
+  color-scheme: light;
+  color: #1f2328;
+  background-color: transparent; /* we manage bg via Tailwind */
+}
+
+[data-theme="light"] .markdown-body a {
+  color: #0969da;
+}
+
+[data-theme="light"] .markdown-body h1 {
+  border-bottom-color: #d1d9e0b3;
+}
+
+[data-theme="light"] .markdown-body h2 {
+  border-bottom-color: #d1d9e0b3;
+}
+
+[data-theme="light"] .markdown-body h6 {
+  color: #59636e;
+}
+
+[data-theme="light"] .markdown-body mark {
+  background-color: #fff8c5;
+  color: #1f2328;
+}
+
+[data-theme="light"] .markdown-body hr {
+  border-bottom-color: #d1d9e0b3;
+  background-color: #d1d9e0;
+}
+
+[data-theme="light"] .markdown-body blockquote {
+  color: #59636e;
+  border-left-color: #d1d9e0;
+}
+
+[data-theme="light"] .markdown-body kbd {
+  color: #1f2328;
+  background-color: #f6f8fa;
+}
+
+[data-theme="light"] .markdown-body ::placeholder {
+  color: #59636e;
+}
+
+[data-theme="light"] .markdown-body .absent {
+  color: #d1242f;
+}
+
+[data-theme="light"] .markdown-body h1 .octicon-link,
+[data-theme="light"] .markdown-body h2 .octicon-link,
+[data-theme="light"] .markdown-body h3 .octicon-link,
+[data-theme="light"] .markdown-body h4 .octicon-link,
+[data-theme="light"] .markdown-body h5 .octicon-link,
+[data-theme="light"] .markdown-body h6 .octicon-link {
+  color: #1f2328;
+}
+
+[data-theme="light"] .markdown-body span.frame > span {
+  border-color: #d1d9e0;
+}
+
+[data-theme="light"] .markdown-body span.frame span span {
+  color: #1f2328;
+}
+
+/* Inline code */
+[data-theme="light"] .markdown-body code,
+[data-theme="light"] .markdown-body tt {
+  background-color: #818b981f;
+}
+
+/* Code blocks (pre) */
+[data-theme="light"] .markdown-body .highlight pre,
+[data-theme="light"] .markdown-body pre {
+  color: #1f2328;
+  background-color: #f6f8fa;
+}
+
+/* Tables */
+[data-theme="light"] .markdown-body table th,
+[data-theme="light"] .markdown-body table td {
+  border-color: #d1d9e0;
+}
+
+[data-theme="light"] .markdown-body table tr {
+  background-color: #ffffff;
+  border-top-color: #d1d9e0b3;
+}
+
+[data-theme="light"] .markdown-body table tr:nth-child(2n) {
+  background-color: #f6f8fa;
+}
+
+/* CSV data */
+[data-theme="light"] .markdown-body .csv-data .blob-num {
+  background: #ffffff;
+}
+
+[data-theme="light"] .markdown-body .csv-data th {
+  background: #f6f8fa;
+}
+
+/* Task lists */
+[data-theme="light"] .markdown-body .task-list-item-checkbox {
+  border-color: #d1d9e0;
+}
+
+/* ═══════════════════════════════════════════════
+   highlight.js light palette (GitHub Light)
+   Overrides github-dark-dimmed.css when in light mode
+   ═══════════════════════════════════════════════ */
+
+[data-theme="light"] .hljs {
+  color: #24292e;
+  background: #f6f8fa;
+}
+
+[data-theme="light"] .hljs-doctag,
+[data-theme="light"] .hljs-keyword,
+[data-theme="light"] .hljs-meta .hljs-keyword,
+[data-theme="light"] .hljs-template-tag,
+[data-theme="light"] .hljs-template-variable,
+[data-theme="light"] .hljs-type,
+[data-theme="light"] .hljs-variable.language_ {
+  color: #d73a49;
+}
+
+[data-theme="light"] .hljs-title,
+[data-theme="light"] .hljs-title.class_,
+[data-theme="light"] .hljs-title.class_.inherited__,
+[data-theme="light"] .hljs-title.function_ {
+  color: #6f42c1;
+}
+
+[data-theme="light"] .hljs-attr,
+[data-theme="light"] .hljs-attribute,
+[data-theme="light"] .hljs-literal,
+[data-theme="light"] .hljs-meta,
+[data-theme="light"] .hljs-number,
+[data-theme="light"] .hljs-operator,
+[data-theme="light"] .hljs-selector-attr,
+[data-theme="light"] .hljs-selector-class,
+[data-theme="light"] .hljs-selector-id,
+[data-theme="light"] .hljs-variable {
+  color: #005cc5;
+}
+
+[data-theme="light"] .hljs-meta .hljs-string,
+[data-theme="light"] .hljs-regexp,
+[data-theme="light"] .hljs-string {
+  color: #032f62;
+}
+
+[data-theme="light"] .hljs-built_in,
+[data-theme="light"] .hljs-symbol {
+  color: #e36209;
+}
+
+[data-theme="light"] .hljs-code,
+[data-theme="light"] .hljs-comment,
+[data-theme="light"] .hljs-formula {
+  color: #6a737d;
+}
+
+[data-theme="light"] .hljs-name,
+[data-theme="light"] .hljs-quote,
+[data-theme="light"] .hljs-selector-pseudo,
+[data-theme="light"] .hljs-selector-tag {
+  color: #22863a;
+}
+
+[data-theme="light"] .hljs-subst {
+  color: #24292e;
+}
+
+[data-theme="light"] .hljs-section {
+  color: #005cc5;
+  font-weight: bold;
+}
+
+[data-theme="light"] .hljs-bullet {
+  color: #735c0f;
+}
+
+[data-theme="light"] .hljs-emphasis {
+  color: #24292e;
+  font-style: italic;
+}
+
+[data-theme="light"] .hljs-strong {
+  color: #24292e;
+  font-weight: bold;
+}
+
+[data-theme="light"] .hljs-addition {
+  color: #22863a;
+  background-color: #f0fff4;
+}
+
+[data-theme="light"] .hljs-deletion {
+  color: #b31d28;
+  background-color: #ffeef0;
+}

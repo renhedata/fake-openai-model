@@ -4,6 +4,13 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ── Custom easing variables (per animate skill) ── */
+:root {
+  --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+  --ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
 @layer base {
   html, body {
     @apply bg-base-300 text-base-content antialiased;
@@ -13,6 +20,12 @@
   * {
     scrollbar-width: thin;
     scrollbar-color: hsl(var(--bc) / 0.15) transparent;
+  }
+
+  /* ── Focus ring polish ── */
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-primary/60;
+    outline-style: solid;
   }
 }
 
@@ -46,23 +59,156 @@
   }
 }
 
-/* Light theme code block overrides */
-[data-theme="light"] .hljs {
-  background: #f1f5f9;
-  color: #1e293b;
+/* ── Keyframe animations ── */
+
+/* Staggered list entrance */
+@keyframes fadeSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
-[data-theme="light"] .markdown-body pre {
-  background: #f1f5f9;
+.animate-fade-slide-in {
+  animation: fadeSlideIn 0.35s var(--ease-out-quart) both;
 }
 
-[data-theme="light"] .markdown-body code:not(pre code) {
-  background: #e2e8f0;
-  color: #1e293b;
+/* Subtle pulse for live indicator */
+@keyframes livePulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
 }
 
-/* Override github-markdown-css background to be transparent */
-.markdown-body {
-  --color-canvas-default: transparent;
-  --color-canvas-subtle: transparent;
+.animate-live-pulse {
+  animation: livePulse 2s ease-in-out infinite;
+}
+
+/* Shimmer for loading skeleton */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.animate-shimmer {
+  background: linear-gradient(
+    90deg,
+    hsl(var(--bc) / 0.03) 25%,
+    hsl(var(--bc) / 0.08) 50%,
+    hsl(var(--bc) / 0.03) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.8s ease-in-out infinite;
+}
+
+/* Expand-in for detail panel */
+@keyframes expandIn {
+  from {
+    opacity: 0;
+    max-height: 0;
+  }
+  to {
+    opacity: 1;
+    max-height: 2000px;
+  }
+}
+
+.animate-expand-in {
+  animation: expandIn 0.4s var(--ease-out-quart) both;
+  overflow: hidden;
+}
+
+/* Smooth drawer slide */
+@keyframes slideInRight {
+  from { transform: translateX(100%); }
+  to   { transform: translateX(0); }
+}
+
+@keyframes fadeInBackdrop {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* Stat card subtle entrance */
+@keyframes statReveal {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-stat-reveal {
+  animation: statReveal 0.3s var(--ease-out-quart) both;
+}
+
+/* Toast notification slide */
+@keyframes toastIn {
+  from {
+    opacity: 0;
+    transform: translateY(-12px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-toast-in {
+  animation: toastIn 0.3s var(--ease-out-expo) both;
+}
+
+/* Dark theme: make markdown-body background transparent (we use bg-base-200 via .markdown-surface) */
+[data-theme="business"] .markdown-body,
+[data-theme="dark"] .markdown-body {
+  background-color: transparent;
+}
+
+/* Light theme: make markdown-body background transparent too */
+[data-theme="light"] .markdown-body {
+  background-color: transparent;
+}
+
+
+/* ── Accessible reduced motion ── */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ── Scrollbar styling for Webkit ── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: hsl(var(--bc) / 0.12);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--bc) / 0.22);
+}
+
+/* ── Selection styling ── */
+::selection {
+  background: hsl(var(--p) / 0.2);
+  color: inherit;
 }
