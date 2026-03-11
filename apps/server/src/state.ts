@@ -52,7 +52,14 @@ export type DashboardState = {
   models: ModelRecord[];
 };
 
-const listeners = new Set<(latest: ExchangeRecord | null, state: DashboardState) => void>();
+/** Lightweight version without the heavy items array — used for SSE pushes */
+export type DashboardMeta = {
+  stats: ExchangeStats;
+  config: ProxyConfig;
+  models: ModelRecord[];
+};
+
+const listeners = new Set<(latest: ExchangeRecord | null, meta: DashboardMeta) => void>();
 
 const defaultModels: ModelRecord[] = [
   {
@@ -269,8 +276,8 @@ const mapModelRow = (row: Record<string, unknown>): ModelRecord => ({
 });
 
 const emit = (latest: ExchangeRecord | null) => {
-  const state = getDashboardState();
-  listeners.forEach((listener) => listener(latest, state));
+  const meta = getDashboardMeta();
+  listeners.forEach((listener) => listener(latest, meta));
 };
 
 export const addExchange = (params: {
@@ -552,6 +559,14 @@ export const deleteAllExchanges = () => {
   emit(null);
 };
 
+/** Lightweight: stats + config + models, NO items */
+export const getDashboardMeta = (): DashboardMeta => ({
+  stats: getExchangeStats(),
+  config: getProxyConfig(),
+  models: getModels()
+});
+
+/** Full state including items — used only for initial REST fetch, not SSE */
 export const getDashboardState = (): DashboardState => ({
   items: [...getExchanges()],
   stats: getExchangeStats(),
@@ -559,7 +574,7 @@ export const getDashboardState = (): DashboardState => ({
   models: getModels()
 });
 
-export const subscribeExchangeUpdated = (listener: (latest: ExchangeRecord | null, state: DashboardState) => void) => {
+export const subscribeExchangeUpdated = (listener: (latest: ExchangeRecord | null, meta: DashboardMeta) => void) => {
   listeners.add(listener);
   return () => listeners.delete(listener);
 };

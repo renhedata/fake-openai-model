@@ -15,6 +15,7 @@ import {
   completeExchange,
   deleteExchanges,
   deleteAllExchanges,
+  getDashboardMeta,
   getDashboardState,
   getExchangesPaginated,
   getModels,
@@ -107,10 +108,11 @@ app.get("/events/prompts", (req, res) => {
     res.write(`data: ${JSON.stringify(payload)}\n\n`);
   };
 
-  send({ type: "snapshot", state: getDashboardState() });
+  // Send lightweight meta (no items) on initial snapshot
+  send({ type: "snapshot", meta: getDashboardMeta() });
 
-  const unsubscribe = subscribeExchangeUpdated((latest, state) => {
-    send({ type: "update", latest, state });
+  const unsubscribe = subscribeExchangeUpdated((latest, meta) => {
+    send({ type: "update", latest, meta });
   });
 
   req.on("close", () => {

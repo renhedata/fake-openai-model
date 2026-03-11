@@ -89,10 +89,20 @@ type DashboardState = {
   models: ModelRecord[];
 };
 
+/** Lightweight SSE payload — no items array */
+type DashboardMeta = {
+  stats: ExchangeStats;
+  config: ProxyConfig;
+  models: ModelRecord[];
+};
+
 type DashboardEvent = {
   type: "snapshot" | "update";
   latest?: ExchangeRecord | null;
-  state: DashboardState;
+  /** New lightweight meta (stats/config/models only) */
+  meta?: DashboardMeta;
+  /** @deprecated — old SSE format, kept for backward compat */
+  state?: DashboardState;
 };
 
 type UpstreamTestResult = {
@@ -115,6 +125,7 @@ type PaginatedResult = {
 /* ========== helpers ========== */
 
 const PAGE_SIZE = 50;
+const RENDER_BATCH_SIZE = 30; // render rows incrementally to avoid jank
 const apiTypeToPath = (t: ApiType) => (t === "responses" ? "/v1/responses" : "/v1/chat/completions");
 const pathToApiType = (p: string): ApiType => (p.includes("/responses") ? "responses" : "chat_completions");
 
@@ -133,8 +144,7 @@ const normalizeConfig = (v?: Partial<ProxyConfig>): ProxyConfig => {
 
 const defaultConfig: ProxyConfig = normalizeConfig();
 
-const emptyState: DashboardState = {
-  items: [],
+const emptyMeta: DashboardMeta = {
   stats: { totalRequests: 0, totalPromptTokens: 0, totalForwarded: 0, totalCaptureOnly: 0 },
   config: defaultConfig,
   models: []
@@ -314,13 +324,15 @@ const StatMini = ({ icon: Icon, label, value, delay = 0 }: { icon: LucideIcon; l
   </div>
 );
 
-const MarkdownSurface = ({ markdown }: { markdown: string }) => (
-  <div className="markdown-body markdown-surface">
-    <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
-      {markdown}
-    </ReactMarkdown>
-  </div>
-);
+const MarkdownSurface = memo(function MarkdownSurface({ markdown }: { markdown: string }) {
+  return (
+    <div className="markdown-body markdown-surface">
+      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+        {markdown}
+      </ReactMarkdown>
+    </div>
+  );
+});
 
 const RoleMessages = ({ messages }: { messages: ChatMessage[] }) => {
   const [expandedMsgs, setExpandedMsgs] = useState<Set<number>>(new Set());
@@ -1126,7 +1138,7 @@ const ConnectionToast = ({ connected }: { connected: boolean }) => {
 };
 
 export const App = () => {
-  const [dashboard, setDashboard] = useState<DashboardState>(emptyState);
+  const [dashboardMeta, setDashboardMeta] = useState<DashboardMeta>(emptyMeta);
   const [configForm, setConfigForm] = useState<ProxyConfig>(defaultConfig);
   const [connected, setConnected] = useState(false);
 
@@ -1226,8 +1238,8 @@ export const App = () => {
     return () => clearTimeout(t);
   }, [searchInput]);
 
-  /* SSE — updates dashboard stats/config and prepends new exchanges to the paginated list.
-     Includes automatic reconnection with exponential backoff (harden skill). */
+  /* SSE — updates dashboard meta (stats/config/models) and prepends new exchanges.
+     Includes automatic reconnection with exponential backoff. */
   useEffect(() => {
     let es: EventSource | null = null;
     let retryCount = 0;
@@ -1240,14 +1252,13 @@ export const App = () => {
 
       es.onopen = () => {
         setConnected(true);
-        retryCount = 0; // reset backoff on successful connect
+        retryCount = 0;
       };
 
       es.onerror = () => {
         setConnected(false);
         es?.close();
         if (!disposed) {
-          // Exponential backoff: 1s, 2s, 4s, 8s, max 30s
           const delay = Math.min(1000 * Math.pow(2, retryCount), 30000);
           retryCount++;
           retryTimer = setTimeout(connect, delay);
@@ -1257,12 +1268,15 @@ export const App = () => {
       es.onmessage = (ev) => {
         try {
           const data = JSON.parse(ev.data) as DashboardEvent;
-          const ns = data.state ?? emptyState;
-          const nc = normalizeConfig(ns.config);
-          setDashboard({ ...ns, config: nc });
-          if (!dirtyRef.current) {
-            setConfigForm(nc);
-            lastSavedSignatureRef.current = JSON.stringify(nc);
+          // Use new lightweight meta if available, fall back to legacy state
+          const meta = data.meta ?? (data.state ? { stats: data.state.stats, config: data.state.config, models: data.state.models } : null);
+          if (meta) {
+            const nc = normalizeConfig(meta.config);
+            setDashboardMeta({ stats: meta.stats, config: nc, models: meta.models });
+            if (!dirtyRef.current) {
+              setConfigForm(nc);
+              lastSavedSignatureRef.current = JSON.stringify(nc);
+            }
           }
           // If there's a latest exchange update from SSE, merge it into paginatedItems
           if (data.latest) {
@@ -1270,7 +1284,7 @@ export const App = () => {
             setPaginatedItems((prev) => {
               const idx = prev.findIndex((i) => i.id === latest.id);
               if (idx >= 0) {
-                // Update existing
+                // Update existing item in-place
                 const next = [...prev];
                 next[idx] = latest;
                 return next;
@@ -1287,7 +1301,6 @@ export const App = () => {
               return [latest, ...prev];
             });
             setTotalCount((prev) => {
-              // If it's a new exchange (not update), increment count
               const isNew = data.type === "update" && latest.responseStatus === "pending";
               return isNew ? prev + 1 : prev;
             });
@@ -1316,23 +1329,37 @@ export const App = () => {
     }
     const q = searchQuery.trim().toLowerCase();
     if (q) {
+      // Only search lightweight fields — skip expensive getResponseText()
       items = items.filter((i) =>
         i.prompt.toLowerCase().includes(q) ||
         i.model.toLowerCase().includes(q) ||
         i.id.toLowerCase().includes(q) ||
-        (i.errorMessage ?? "").toLowerCase().includes(q) ||
-        getResponseText(i.responseBody).toLowerCase().includes(q)
+        (i.errorMessage ?? "").toLowerCase().includes(q)
       );
     }
     return items;
   }, [paginatedItems, statusFilter, searchQuery]);
 
-  const visibleItems = filteredItems;
+  /* Progressive rendering: render items in batches to avoid blocking */
+  const [renderCount, setRenderCount] = useState(RENDER_BATCH_SIZE);
+  useEffect(() => {
+    setRenderCount(RENDER_BATCH_SIZE);
+  }, [filteredItems]);
 
-  /* compute total completion tokens */
+  useEffect(() => {
+    if (renderCount >= filteredItems.length) return;
+    const raf = requestAnimationFrame(() => {
+      setRenderCount((prev) => Math.min(prev + RENDER_BATCH_SIZE, filteredItems.length));
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [renderCount, filteredItems.length]);
+
+  const visibleItems = filteredItems.slice(0, renderCount);
+
+  /* compute total completion tokens — estimate from stats to avoid iterating items */
   const totalCompletionTokens = useMemo(
-    () => dashboard.items.reduce((sum, i) => sum + getCompletionTokens(i.responseBody), 0),
-    [dashboard.items]
+    () => paginatedItems.reduce((sum, i) => sum + getCompletionTokens(i.responseBody), 0),
+    [paginatedItems]
   );
 
   /* helpers */
@@ -1375,7 +1402,7 @@ export const App = () => {
       if (!r.ok) throw new Error(await readErrorMessage(r));
       const updated = normalizeConfig((await r.json()) as ProxyConfig);
       setConfigForm(updated);
-      setDashboard((p) => ({ ...p, config: updated }));
+      setDashboardMeta((p) => ({ ...p, config: updated }));
       lastSavedSignatureRef.current = JSON.stringify(updated);
       dirtyRef.current = false; setIsDirty(false);
       setLastSavedAt(new Date().toISOString());
@@ -1399,7 +1426,7 @@ export const App = () => {
       if (!r.ok) throw new Error(await readErrorMessage(r));
       const payload = (await r.json()) as { data?: ModelRecord[] };
       const m = payload.data ?? [];
-      setDashboard((p) => ({ ...p, models: m }));
+      setDashboardMeta((p) => ({ ...p, models: m }));
       setSyncSuccess(`已同步 ${m.length} 个模型`);
       if (configForm.modelOverride && !m.some((x) => x.id === configForm.modelOverride)) onConfigChange("modelOverride", "");
     } catch (e) { setSyncError(e instanceof Error ? e.message : "同步失败"); }
@@ -1578,7 +1605,7 @@ export const App = () => {
     return null;
   }, [activePresetLabel, dateFrom, dateTo, formatDateLabel]);
 
-  const { stats } = dashboard;
+  const { stats } = dashboardMeta;
 
   return (
     <div className="flex h-screen flex-col overflow-hidden">
@@ -1594,8 +1621,8 @@ export const App = () => {
           <h1 className="text-sm font-bold">Fake Model Gateway</h1>
 
           <div className="hidden items-center gap-2 sm:flex">
-            <Badge variant={dashboard.config.mode === "forward" ? "info" : "default"}>
-              {dashboard.config.mode === "forward" ? "Forward" : "Capture"}
+            <Badge variant={dashboardMeta.config.mode === "forward" ? "info" : "default"}>
+              {dashboardMeta.config.mode === "forward" ? "Forward" : "Capture"}
             </Badge>
             <StatusDot ok={connected} label={connected ? "Live" : "Off"} />
           </div>
@@ -1679,7 +1706,7 @@ export const App = () => {
               type="button"
               className="text-[10px] text-error/50 hover:text-error transition-colors px-1.5 py-0.5 rounded hover:bg-error/5 flex items-center gap-1"
               onClick={deleteAll}
-              disabled={deleting || dashboard.items.length === 0}
+              disabled={deleting || totalCount === 0}
             >
               <Trash2 size={10} /> 清空全部
             </button>
@@ -1770,7 +1797,7 @@ export const App = () => {
           </>
         )}
         <span className="text-[10px] text-base-content/25 tabular-nums ml-auto">
-          {initialLoaded ? `${filteredItems.length} / ${totalCount} 条` : `${dashboard.items.length} 条`}
+          {initialLoaded ? `${filteredItems.length} / ${totalCount} 条` : "加载中…"}
         </span>
       </div>
 
@@ -1789,21 +1816,16 @@ export const App = () => {
             visibleItems.map((item, idx) => {
               const serial = totalCount - idx;
               return (
-                <div
+                <ExchangeRow
                   key={item.id}
-                  className="animate-fade-slide-in"
-                  style={{ animationDelay: `${Math.min(idx * 30, 300)}ms` }}
-                >
-                  <ExchangeRow
-                    item={item}
-                    serial={serial}
-                    expanded={expandedId === item.id}
-                    onToggle={() => setExpandedId((p) => (p === item.id ? null : item.id))}
-                    selectMode={selectMode}
-                    selected={selectedIds.has(item.id)}
-                    onSelect={onSelectItem}
-                  />
-                </div>
+                  item={item}
+                  serial={serial}
+                  expanded={expandedId === item.id}
+                  onToggle={() => setExpandedId((p) => (p === item.id ? null : item.id))}
+                  selectMode={selectMode}
+                  selected={selectedIds.has(item.id)}
+                  onSelect={onSelectItem}
+                />
               );
             })
           )}
@@ -1829,7 +1851,7 @@ export const App = () => {
       <SettingsDrawer
         open={settingsOpen}
         configForm={configForm}
-        models={dashboard.models}
+        models={dashboardMeta.models}
         saving={saving}
         isDirty={isDirty}
         saveHint={saveHint}
