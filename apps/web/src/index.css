@@ -19,7 +19,7 @@
 
   * {
     scrollbar-width: thin;
-    scrollbar-color: hsl(var(--bc) / 0.15) transparent;
+    scrollbar-color: oklch(var(--bc) / 0.15) transparent;
   }
 
   /* ── Focus ring polish ── */
@@ -96,9 +96,9 @@
 .animate-shimmer {
   background: linear-gradient(
     90deg,
-    hsl(var(--bc) / 0.03) 25%,
-    hsl(var(--bc) / 0.08) 50%,
-    hsl(var(--bc) / 0.03) 75%
+    oklch(var(--bc) / 0.03) 25%,
+    oklch(var(--bc) / 0.08) 50%,
+    oklch(var(--bc) / 0.03) 75%
   );
   background-size: 200% 100%;
   animation: shimmer 1.8s ease-in-out infinite;
@@ -199,16 +199,17 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: hsl(var(--bc) / 0.12);
+  background: oklch(var(--bc) / 0.12);
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: hsl(var(--bc) / 0.22);
+  background: oklch(var(--bc) / 0.22);
 }
 
 /* ── Selection styling ── */
+/* DaisyUI v4 uses OKLCH variables, so must use oklch() not hsl() */
 ::selection {
-  background-color: hsl(var(--p) / 0.4);
+  background-color: oklch(var(--p) / 0.35);
   color: inherit;
 }
