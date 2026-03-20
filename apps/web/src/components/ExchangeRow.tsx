@@ -33,7 +33,7 @@ export const ExchangeRow = memo(function ExchangeRow({
   return (
     <div className={`rounded-lg border transition-all duration-200 ${
       selected
-        ? "border-primary/40 bg-primary/[0.03]"
+        ? "border-primary/50 bg-primary/10"
         : expanded
           ? "border-primary/30 bg-base-100 shadow-lg shadow-primary/5"
           : "border-base-content/5 bg-base-100 hover:border-base-content/10 hover:shadow-sm"

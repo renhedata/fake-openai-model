@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity, ArrowUpDown, BookOpen, Calendar, CheckSquare, ChevronDown,
-  Coins, Filter, Loader2, MinusSquare, Moon, Radio, Search, Send,
+  Clipboard, Coins, Filter, Loader2, MinusSquare, Moon, Radio, Search, Send,
   Server, Settings2, Shield, Square, Sun, Trash2, X, Zap,
 } from "lucide-react";
 import type { ApiType, DashboardEvent, ExchangeRecord, ModelRecord, ProxyConfig, UpstreamTestResult } from "./types";
@@ -9,7 +9,7 @@ import { type PaginatedResult } from "./types";
 import {
   PAGE_SIZE, RENDER_BATCH_SIZE,
   apiTypeToPath, normalizeConfig, defaultConfig, emptyMeta,
-  getCompletionTokens,
+  getCompletionTokens, getResponseText, getReasoningText,
 } from "./utils";
 import { Badge, StatMini, StatusDot } from "./components/Atoms";
 import { ConnectionToast } from "./components/ConnectionToast";
@@ -310,6 +310,25 @@ export const App = () => {
     finally { setDeleting(false); }
   }, []);
 
+  const [copyDone, setCopyDone] = useState(false);
+  const copySelected = useCallback(() => {
+    if (selectedIds.size === 0) return;
+    const items = filteredItems.filter((i) => selectedIds.has(i.id));
+    const text = items.map((item, idx) => {
+      const prompt = item.prompt || "";
+      const response = getResponseText(item.responseBody);
+      const reasoning = getReasoningText(item.responseBody);
+      const parts = [`[${idx + 1}] ${item.model} · ${item.createdAt}`, `Prompt:\n${prompt}`];
+      if (reasoning) parts.push(`Thinking:\n${reasoning}`);
+      if (response) parts.push(`Response:\n${response}`);
+      return parts.join("\n\n");
+    }).join("\n\n" + "─".repeat(60) + "\n\n");
+    navigator.clipboard.writeText(text).then(() => {
+      setCopyDone(true);
+      setTimeout(() => setCopyDone(false), 2000);
+    });
+  }, [selectedIds, filteredItems]);
+
   const clearDateFilter = useCallback(() => { setDateFrom(""); setDateTo(""); }, []);
   const hasDateFilter = dateFrom || dateTo;
 
@@ -444,6 +463,9 @@ export const App = () => {
             {selectedIds.size > 0 && (
               <>
                 <span className="text-[10px] tabular-nums text-primary font-medium">已选 {selectedIds.size}</span>
+                <button type="button" className="btn btn-outline btn-xs gap-1 h-5 min-h-0 text-[10px]" onClick={copySelected}>
+                  <Clipboard size={10} /> {copyDone ? "已复制!" : "复制内容"}
+                </button>
                 <button type="button" className="btn btn-error btn-xs gap-1 h-5 min-h-0 text-[10px]" onClick={deleteSelected} disabled={deleting}>
                   <Trash2 size={10} /> {deleting ? "删除中…" : "删除选中"}
                 </button>
