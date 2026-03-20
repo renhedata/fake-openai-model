@@ -209,6 +209,6 @@
 
 /* ── Selection styling ── */
 ::selection {
-  background: hsl(var(--p) / 0.2);
+  background-color: hsl(var(--p) / 0.4);
   color: inherit;
 }
