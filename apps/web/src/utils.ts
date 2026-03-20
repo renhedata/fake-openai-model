@@ -65,14 +65,7 @@ export const getResponseText = (v: unknown): string => {
   }
   const msg = r.choices?.[0]?.message;
   if (msg) {
-    let text = "";
-    if (typeof msg.reasoning_content === "string" && msg.reasoning_content.trim()) {
-      text += `<think>\n${msg.reasoning_content}\n</think>\n\n`;
-    }
-    if (typeof msg.content === "string" && msg.content.trim()) {
-      text += msg.content;
-    }
-    if (text.trim()) return text;
+    if (typeof msg.content === "string" && msg.content.trim()) return msg.content;
     if (Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
       return msg.tool_calls
         .map((tc) => {
@@ -82,6 +75,20 @@ export const getResponseText = (v: unknown): string => {
         })
         .join("\n");
     }
+  }
+  return "";
+};
+
+export const getReasoningText = (v: unknown): string => {
+  if (!v || typeof v !== "object") return "";
+  const r = v as Record<string, unknown>;
+  // Streaming mode: stored as r.reasoning
+  if (typeof r.reasoning === "string" && r.reasoning.trim()) return r.reasoning;
+  // Non-streaming: stored in choices[0].message.reasoning_content
+  const choices = r.choices as Array<Record<string, unknown>> | undefined;
+  const msg = choices?.[0]?.message as Record<string, unknown> | undefined;
+  if (msg && typeof msg.reasoning_content === "string" && msg.reasoning_content.trim()) {
+    return msg.reasoning_content;
   }
   return "";
 };

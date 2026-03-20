@@ -1,7 +1,7 @@
 import { memo, useMemo } from "react";
 import { CheckCircle2, ExternalLink, Loader2, Send, X, XCircle, Zap } from "lucide-react";
 import type { ExchangeRecord } from "../types";
-import { buildResponseMarkdown, extractMessages, formatRelative, formatTimeFull, getCompletionTokens, getResponseText, safeStringify } from "../utils";
+import { buildResponseMarkdown, extractMessages, formatRelative, formatTimeFull, getCompletionTokens, getReasoningText, getResponseText, safeStringify } from "../utils";
 import { Badge, CopyButton, MarkdownSurface } from "./Atoms";
 import { RoleMessages } from "./RoleMessages";
 
@@ -24,6 +24,7 @@ export const ExchangeDetail = memo(function ExchangeDetail({
   const totalTokens = item.promptTokens + completionTokens;
   const responseMd = buildResponseMarkdown(item.responseBody);
   const responseText = getResponseText(item.responseBody);
+  const reasoningText = getReasoningText(item.responseBody);
   const statusVariant = item.responseStatus === "success" ? "success" : item.responseStatus === "error" ? "error" : "warning";
 
   return (
@@ -95,7 +96,19 @@ export const ExchangeDetail = memo(function ExchangeDetail({
                 <Loader2 size={14} className="animate-spin" /> 等待响应…
               </p>
             ) : (
-              <MarkdownSurface markdown={responseMd} />
+              <>
+                {reasoningText && (
+                  <details className="mb-3 rounded-lg border border-base-content/8 bg-base-200/60 text-xs">
+                    <summary className="cursor-pointer select-none px-3 py-1.5 text-[11px] text-base-content/40 hover:text-base-content/60">
+                      思考过程 ({reasoningText.length} 字符)
+                    </summary>
+                    <div className="border-t border-base-content/5 px-3 py-2">
+                      <MarkdownSurface markdown={reasoningText} />
+                    </div>
+                  </details>
+                )}
+                <MarkdownSurface markdown={responseMd} />
+              </>
             )}
           </div>
         </div>

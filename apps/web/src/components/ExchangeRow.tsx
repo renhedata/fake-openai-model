@@ -5,7 +5,7 @@ import { extractMessages, formatTime, formatTimeFull, getCompletionTokens, trunc
 import { Badge } from "./Atoms";
 
 export const ExchangeRow = memo(function ExchangeRow({
-  item, serial, expanded, onToggle, selectMode, selected, onSelect,
+  item, serial, expanded, onToggle, selectMode, selected, onSelect, compact,
 }: {
   item: ExchangeRecord;
   serial: number;
@@ -14,6 +14,7 @@ export const ExchangeRow = memo(function ExchangeRow({
   selectMode: boolean;
   selected: boolean;
   onSelect: (id: string, checked: boolean) => void;
+  compact?: boolean;
 }) {
   const messages = useMemo(() => extractMessages(item.requestBody), [item.requestBody]);
 
@@ -69,20 +70,24 @@ export const ExchangeRow = memo(function ExchangeRow({
             {item.mode === "forward" ? "FWD" : "CAP"}
           </Badge>
 
-          <span className="mono shrink-0 text-[11px] text-base-content/50 w-24 truncate" title={item.model}>{item.model}</span>
+          {!compact && (
+            <span className="mono shrink-0 text-[11px] text-base-content/50 w-24 truncate" title={item.model}>{item.model}</span>
+          )}
 
-          <span className="shrink-0 text-[10px] tabular-nums text-base-content/40" title={`入:${item.promptTokens} 出:${completionTokens} 总:${totalTokens}`}>
-            <span className="text-info/60">{item.promptTokens}</span>
-            <span className="text-base-content/20"> / </span>
-            <span className="text-success/60">{completionTokens}</span>
-            <span className="text-base-content/20"> tok</span>
-          </span>
+          {!compact && (
+            <span className="shrink-0 text-[10px] tabular-nums text-base-content/40" title={`入:${item.promptTokens} 出:${completionTokens} 总:${totalTokens}`}>
+              <span className="text-info/60">{item.promptTokens}</span>
+              <span className="text-base-content/20"> / </span>
+              <span className="text-success/60">{completionTokens}</span>
+              <span className="text-base-content/20"> tok</span>
+            </span>
+          )}
 
-          {typeof item.durationMs === "number" && (
+          {!compact && typeof item.durationMs === "number" && (
             <span className="shrink-0 text-[10px] tabular-nums text-base-content/30">{item.durationMs}ms</span>
           )}
 
-          {typeof item.upstreamStatusCode === "number" && (
+          {!compact && typeof item.upstreamStatusCode === "number" && (
             <Badge variant={item.upstreamStatusCode < 400 ? "success" : "error"}>
               {item.upstreamStatusCode}
             </Badge>

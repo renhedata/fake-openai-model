@@ -440,8 +440,9 @@ const extractPromptText = (body: Record<string, unknown>): { captured: string; p
   return { captured, promptTokens: Math.max(1, Math.ceil(Math.max(1, captured.length) / 4)) };
 };
 
-const extractAssistantContentFromSse = (raw: string) => {
+const extractAssistantContentFromSse = (raw: string): { content: string; reasoning: string } => {
   let content = "";
+  let reasoning = "";
   const toolCalls: Array<{
     index: number;
     id?: string;
@@ -475,12 +476,14 @@ const extractAssistantContentFromSse = (raw: string) => {
       };
       const delta = parsed.choices?.[0]?.delta;
       if (delta?.content && typeof delta.content === "string") {
-        content += delta.content;
+        // Strip <think>/<\/think> markers (some models send them as content deltas)
+        const stripped = delta.content.replace(/<\/?think>/gi, "");
+        content += stripped;
       }
-      // Capture reasoning/thinking content
-      const reasoning = (delta as Record<string, unknown> | undefined)?.reasoning_content;
-      if (typeof reasoning === "string") {
-        content += reasoning;
+      // reasoning_content goes to a separate field, not mixed into content
+      const reasoningDelta = (delta as Record<string, unknown> | undefined)?.reasoning_content;
+      if (typeof reasoningDelta === "string") {
+        reasoning += reasoningDelta;
       }
       // Accumulate tool_calls from streaming deltas
       if (Array.isArray(delta?.tool_calls)) {
@@ -508,15 +511,15 @@ const extractAssistantContentFromSse = (raw: string) => {
     }
   }
 
-  const result = content.trim();
+  let result = content.trim();
   if (toolCalls.length > 0) {
     const tcSummary = toolCalls
       .filter(Boolean)
       .map((tc) => `${tc.function.name}(${tc.function.arguments})`)
       .join("; ");
-    return result ? `${result}\n\n[Tool Calls] ${tcSummary}` : `[Tool Calls] ${tcSummary}`;
+    result = result ? `${result}\n\n[Tool Calls] ${tcSummary}` : `[Tool Calls] ${tcSummary}`;
   }
-  return result;
+  return { content: result, reasoning: reasoning.trim() };
 };
 
 app.post("/v1/chat/completions", async (req, res) => {
@@ -698,11 +701,13 @@ app.post("/v1/chat/completions", async (req, res) => {
       }
 
       res.end();
+      const extracted = extractAssistantContentFromSse(capturedSse);
       completeExchange(record.id, {
         responseStatus: upstreamResponse.ok ? "success" : "error",
         responseBody: {
           stream: true,
-          assistant: extractAssistantContentFromSse(capturedSse),
+          assistant: extracted.content,
+          ...(extracted.reasoning ? { reasoning: extracted.reasoning } : {}),
           rawSse: capturedSse,
         },
         upstreamUrl,

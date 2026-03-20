@@ -543,6 +543,7 @@ export const App = () => {
                     expanded={expandedId === item.id}
                     onToggle={() => setExpandedId((p) => (p === item.id ? null : item.id))}
                     selectMode={selectMode} selected={selectedIds.has(item.id)} onSelect={onSelectItem}
+                    compact={!!selectedItem}
                   />
                 ))
               )}
