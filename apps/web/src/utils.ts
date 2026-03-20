@@ -53,7 +53,7 @@ export const getResponseText = (v: unknown): string => {
     content?: string | unknown[];
     output_text?: string;
   };
-  if (typeof r.assistant === "string") return r.assistant;
+  if (typeof r.assistant === "string" && r.assistant.trim()) return r.assistant;
   if (typeof r.output_text === "string") return r.output_text;
   if (typeof r.content === "string") return r.content;
   if (Array.isArray(r.content)) {
@@ -117,7 +117,14 @@ export const getCompletionTokens = (v: unknown): number => {
 
 export const buildResponseMarkdown = (v: unknown) => {
   const t = getResponseText(v);
-  return t.trim() ? t : `\`\`\`json\n${safeStringify(v ?? {})}\n\`\`\``;
+  if (t.trim()) return t;
+  // Omit rawSse from fallback JSON dump to avoid huge code blocks
+  if (v && typeof v === "object") {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { rawSse, ...rest } = v as Record<string, unknown>;
+    return `\`\`\`json\n${safeStringify(rest)}\n\`\`\``;
+  }
+  return `\`\`\`json\n${safeStringify(v ?? {})}\n\`\`\``;
 };
 
 export const extractMessages = (requestBody: unknown): ChatMessage[] => {

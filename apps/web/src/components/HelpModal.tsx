@@ -22,10 +22,16 @@ const TryItPanel = ({ endpoint, buildBody, extractText }: {
       const r = await fetch(endpoint, {
         method: "POST",
         headers: { "content-type": "application/json", "authorization": "Bearer fake-key", "x-api-key": "fake-key" },
-        body: JSON.stringify(buildBody(msg.trim())),
+        body: JSON.stringify({ ...buildBody(msg.trim()), stream: false }),
       });
-      const data: unknown = await r.json();
-      setResult({ text: extractText(data), ms: Date.now() - t });
+      const text = await r.text();
+      let data: unknown;
+      try { data = JSON.parse(text); } catch { data = { _raw: text }; }
+      const d = data as Record<string, unknown>;
+      const text2 = "_raw" in d
+        ? String(d._raw).slice(0, 500)
+        : extractText(data);
+      setResult({ text: text2, ms: Date.now() - t });
     } catch (e) {
       setError(e instanceof Error ? e.message : "请求失败");
     } finally {
