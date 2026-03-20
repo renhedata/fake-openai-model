@@ -759,6 +759,197 @@ app.post("/v1/chat/completions", async (req, res) => {
   }
 });
 
+/** Extract prompt text from Anthropic-format request body */
+const extractPromptTextAnthropic = (body: Record<string, unknown>): { captured: string; promptTokens: number } => {
+  const parts: string[] = [];
+  if (typeof body.system === "string" && body.system.trim()) {
+    parts.push(body.system.trim());
+  }
+  if (Array.isArray(body.messages)) {
+    for (const m of body.messages) {
+      if (!m || typeof m !== "object") continue;
+      const msg = m as Record<string, unknown>;
+      if (msg.role !== "user") continue;
+      if (typeof msg.content === "string") {
+        parts.push(msg.content);
+      } else if (Array.isArray(msg.content)) {
+        for (const part of msg.content) {
+          if (typeof part === "string") parts.push(part);
+          else if (part && typeof part === "object") {
+            const p = part as Record<string, unknown>;
+            if (typeof p.text === "string") parts.push(p.text);
+          }
+        }
+      }
+    }
+  }
+  const captured = parts.join("\n").trim();
+  return { captured, promptTokens: Math.max(1, Math.ceil(Math.max(1, captured.length) / 4)) };
+};
+
+/** Build forward headers for Anthropic upstream (uses x-api-key instead of Authorization) */
+const buildAnthropicForwardHeaders = (req: express.Request, apiKey: string): Record<string, string> => {
+  const headers: Record<string, string> = {};
+  for (const [key, value] of Object.entries(req.headers)) {
+    if (HOP_BY_HOP_HEADERS.has(key.toLowerCase())) continue;
+    if (typeof value === "string") {
+      headers[key] = value;
+    } else if (Array.isArray(value)) {
+      headers[key] = value.join(", ");
+    }
+  }
+  if (apiKey.trim()) {
+    headers["x-api-key"] = apiKey.trim();
+    delete headers["authorization"];
+  }
+  if (!headers["content-type"]) headers["content-type"] = "application/json";
+  if (!headers["anthropic-version"]) headers["anthropic-version"] = "2023-06-01";
+  return headers;
+};
+
+/** Extract text content from Anthropic SSE stream */
+const extractAnthropicSseContent = (raw: string): string => {
+  let content = "";
+  for (const line of raw.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("data:")) continue;
+    const data = trimmed.slice(5).trim();
+    if (!data) continue;
+    try {
+      const parsed = JSON.parse(data) as { type?: string; delta?: { type?: string; text?: string } };
+      if (parsed.type === "content_block_delta" && parsed.delta?.type === "text_delta" && typeof parsed.delta.text === "string") {
+        content += parsed.delta.text;
+      }
+    } catch { continue; }
+  }
+  return content.trim();
+};
+
+app.post("/v1/messages", async (req, res) => {
+  const config = getProxyConfig();
+  const body = req.body as Record<string, unknown>;
+
+  const rawModel = typeof body.model === "string" ? body.model : "unknown";
+  const model = config.modelOverride.trim() || rawModel;
+  const stream = body.stream === true;
+  const { captured, promptTokens } = extractPromptTextAnthropic(body);
+
+  const recordBody = config.modelOverride.trim() ? { ...body, model } : body;
+  const record = addExchange({ mode: config.mode, model, prompt: captured, promptTokens, requestBody: recordBody });
+
+  if (config.mode === "capture_only") {
+    const content = createFakeStreamText(captured);
+    const msgId = `msg_${Date.now()}`;
+    const inputTokens = promptTokens;
+    const outputTokens = Math.max(1, Math.ceil(content.length / 4));
+
+    if (stream) {
+      const startedAt = Date.now();
+      res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+
+      const writeEvent = (event: string, data: unknown) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+
+      writeEvent("message_start", { type: "message_start", message: { id: msgId, type: "message", role: "assistant", content: [], model, stop_reason: null, stop_sequence: null, usage: { input_tokens: inputTokens, output_tokens: 0 } } });
+      writeEvent("content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } });
+      writeEvent("ping", { type: "ping" });
+
+      for (const part of (content.match(/.{1,12}/g) ?? [content])) {
+        writeEvent("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: part } });
+      }
+
+      writeEvent("content_block_stop", { type: "content_block_stop", index: 0 });
+      writeEvent("message_delta", { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: outputTokens } });
+      writeEvent("message_stop", { type: "message_stop" });
+      res.end();
+
+      completeExchange(record.id, { responseStatus: "success", responseBody: { stream: true, content, output_text: content }, durationMs: Date.now() - startedAt });
+      return;
+    }
+
+    const fakeResponse = { id: msgId, type: "message", role: "assistant", content: [{ type: "text", text: content }], model, stop_reason: "end_turn", stop_sequence: null, usage: { input_tokens: inputTokens, output_tokens: outputTokens } };
+    completeExchange(record.id, { responseStatus: "success", responseBody: fakeResponse, durationMs: 0 });
+    res.json(fakeResponse);
+    return;
+  }
+
+  const startedAt = Date.now();
+  let upstreamUrl = "";
+  try {
+    upstreamUrl = resolveUpstreamUrl(config.baseUrl, "/v1/messages");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "invalid upstream config";
+    completeExchange(record.id, { responseStatus: "error", errorMessage: message, durationMs: Date.now() - startedAt });
+    res.status(400).json({ error: { message: "Invalid upstream config", type: "invalid_request_error", detail: message } });
+    return;
+  }
+
+  const forwardBody: Record<string, unknown> = { ...body };
+  if (config.modelOverride.trim()) forwardBody.model = config.modelOverride.trim();
+
+  const forwardHeaders = buildAnthropicForwardHeaders(req, config.apiKey);
+
+  try {
+    const upstreamResponse = await fetch(upstreamUrl, { method: "POST", headers: forwardHeaders, body: JSON.stringify(forwardBody) });
+
+    if (stream) {
+      const contentType = upstreamResponse.headers.get("content-type") ?? "text/event-stream; charset=utf-8";
+      res.status(upstreamResponse.status);
+      res.setHeader("Content-Type", contentType);
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+
+      const captureLimit = 24000;
+      let capturedSse = "";
+      const decoder = new TextDecoder();
+
+      if (upstreamResponse.body) {
+        const reader = upstreamResponse.body.getReader();
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (value) {
+            res.write(Buffer.from(value));
+            if (capturedSse.length < captureLimit) {
+              capturedSse += decoder.decode(value, { stream: true }).slice(0, captureLimit - capturedSse.length);
+            }
+          }
+        }
+      }
+      res.end();
+
+      const extractedContent = extractAnthropicSseContent(capturedSse);
+      completeExchange(record.id, {
+        responseStatus: upstreamResponse.ok ? "success" : "error",
+        responseBody: { stream: true, content: extractedContent, output_text: extractedContent, rawSse: capturedSse },
+        upstreamUrl, upstreamStatusCode: upstreamResponse.status, durationMs: Date.now() - startedAt,
+        errorMessage: upstreamResponse.ok ? undefined : `upstream returned ${upstreamResponse.status}`,
+      });
+      return;
+    }
+
+    const text = await upstreamResponse.text();
+    const upstreamParsed = tryParseJson(text);
+    completeExchange(record.id, {
+      responseStatus: upstreamResponse.ok ? "success" : "error",
+      responseBody: upstreamParsed, upstreamUrl, upstreamStatusCode: upstreamResponse.status,
+      durationMs: Date.now() - startedAt,
+      errorMessage: upstreamResponse.ok ? undefined : `upstream returned ${upstreamResponse.status}`,
+    });
+    const upstreamType = upstreamResponse.headers.get("content-type") ?? "";
+    if (upstreamType.includes("application/json") && typeof upstreamParsed !== "string") {
+      res.status(upstreamResponse.status).json(upstreamParsed);
+      return;
+    }
+    res.status(upstreamResponse.status).send(text);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "unknown upstream error";
+    completeExchange(record.id, { responseStatus: "error", errorMessage: message, upstreamUrl, durationMs: Date.now() - startedAt });
+    res.status(502).json({ error: { message: "Upstream request failed", type: "api_error", detail: message } });
+  }
+});
+
 // --- Transparent proxy for all other /v1/* endpoints in forward mode ---
 app.all("/v1/*", async (req, res) => {
   const config = getProxyConfig();
