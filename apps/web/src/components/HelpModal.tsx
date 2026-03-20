@@ -1,5 +1,77 @@
-import { ArrowUpDown, BookOpen, Shield, X } from "lucide-react";
+import { useState } from "react";
+import { ArrowUpDown, BookOpen, CheckCircle2, Loader2, Play, Shield, X, XCircle } from "lucide-react";
 import { Badge } from "./Atoms";
+
+const TryItPanel = ({ endpoint, buildBody, extractText }: {
+  endpoint: string;
+  buildBody: (msg: string) => object;
+  extractText: (data: unknown) => string;
+}) => {
+  const [msg, setMsg] = useState("你好，请用一句话介绍你自己。");
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<{ text: string; ms: number } | null>(null);
+  const [error, setError] = useState("");
+
+  const run = async () => {
+    if (!msg.trim() || loading) return;
+    setLoading(true);
+    setResult(null);
+    setError("");
+    const t = Date.now();
+    try {
+      const r = await fetch(endpoint, {
+        method: "POST",
+        headers: { "content-type": "application/json", "authorization": "Bearer fake-key", "x-api-key": "fake-key" },
+        body: JSON.stringify(buildBody(msg.trim())),
+      });
+      const data: unknown = await r.json();
+      setResult({ text: extractText(data), ms: Date.now() - t });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "请求失败");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="mt-2 rounded-lg border border-base-content/8 bg-base-100 p-3 space-y-2">
+      <div className="flex gap-2">
+        <input
+          className="input input-bordered input-xs flex-1 text-xs bg-base-200 font-sans"
+          value={msg}
+          onChange={(e) => setMsg(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") void run(); }}
+          placeholder="输入消息…"
+        />
+        <button
+          type="button"
+          className="btn btn-primary btn-xs gap-1 shrink-0"
+          onClick={() => void run()}
+          disabled={loading || !msg.trim()}
+        >
+          {loading ? <Loader2 size={11} className="animate-spin" /> : <Play size={11} />}
+          {loading ? "请求中…" : "发送"}
+        </button>
+      </div>
+      {error && (
+        <div className="flex items-center gap-1.5 text-[11px] text-error">
+          <XCircle size={11} /> {error}
+        </div>
+      )}
+      {result && (
+        <div className="rounded-lg bg-base-200 p-2.5">
+          <div className="mb-1.5 flex items-center justify-between">
+            <span className="flex items-center gap-1 text-[10px] text-success font-medium">
+              <CheckCircle2 size={9} /> 响应成功
+            </span>
+            <span className="text-[10px] tabular-nums text-base-content/30">{result.ms}ms</span>
+          </div>
+          <p className="text-xs text-base-content/70 whitespace-pre-wrap leading-relaxed">{result.text}</p>
+        </div>
+      )}
+    </div>
+  );
+};
 
 export const HelpModal = ({ open, onClose }: { open: boolean; onClose: () => void }) => {
   if (!open) return null;
@@ -41,6 +113,14 @@ const resp = await client.chat.completions.create({
   model: "gpt-4o",
   messages: [{ role: "user", content: "Hello!" }],
 });`}</pre>
+              <TryItPanel
+                endpoint="/v1/chat/completions"
+                buildBody={(msg) => ({ model: "gpt-4o", messages: [{ role: "user", content: msg }] })}
+                extractText={(data) => {
+                  const d = data as { choices?: Array<{ message?: { content?: string } }> };
+                  return d?.choices?.[0]?.message?.content ?? JSON.stringify(data, null, 2);
+                }}
+              />
             </section>
 
             <section>
@@ -58,6 +138,14 @@ const resp = await client.messages.create({
   max_tokens: 1024,
   messages: [{ role: "user", content: "Hello!" }],
 });`}</pre>
+              <TryItPanel
+                endpoint="/v1/messages"
+                buildBody={(msg) => ({ model: "claude-3-5-sonnet-20241022", max_tokens: 256, messages: [{ role: "user", content: msg }] })}
+                extractText={(data) => {
+                  const d = data as { content?: Array<{ type?: string; text?: string }> };
+                  return d?.content?.find((b) => b.type === "text")?.text ?? JSON.stringify(data, null, 2);
+                }}
+              />
             </section>
 
             <section>
