@@ -31,9 +31,10 @@ const port = Number(process.env.PORT ?? 3001);
 app.use(cors());
 app.use(express.json({ limit: "50mb" }));
 
-// --- Serve static web assets ---
+// --- Serve static web assets (production only) ---
 const webDistPath = resolve(import.meta.dirname ?? __dirname, "../../web/dist");
-if (existsSync(webDistPath)) {
+const serveStatic = process.env.NODE_ENV !== "development" && existsSync(webDistPath);
+if (serveStatic) {
   app.use(express.static(webDistPath, { index: false }));
 }
 
@@ -830,6 +831,116 @@ const extractAnthropicSseContent = (raw: string): string => {
   return content.trim();
 };
 
+/** Handle /v1/messages streaming response from upstream.
+ * Auto-detects format: translates OpenAI SSE → Anthropic SSE if needed, or passes Anthropic SSE through. */
+const handleMessagesStream = async (
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  res: express.Response,
+  msgId: string,
+  model: string,
+): Promise<{ capturedSse: string; content: string; reasoning: string; format: "oai" | "anthropic" | "unknown" }> => {
+  const decoder = new TextDecoder();
+  let lineBuffer = "";
+  let capturedSse = "";
+  const captureLimit = 24000;
+  let format: "oai" | "anthropic" | "unknown" = "unknown";
+  let oaiContentBlockOpen = false;
+  let oaiDone = false;
+  let content = "";
+  let reasoning = "";
+
+  const writeEvent = (event: string, data: unknown) => {
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
+
+  const handleOaiChunk = (data: string) => {
+    if (data === "[DONE]") return;
+    let parsed: {
+      choices?: Array<{ delta?: Record<string, unknown>; finish_reason?: string | null }>;
+      usage?: { completion_tokens?: number };
+    };
+    try { parsed = JSON.parse(data); } catch { return; }
+    const choice = parsed.choices?.[0];
+    if (!choice) return;
+    const delta = choice.delta ?? {};
+    if (typeof delta.reasoning_content === "string" && delta.reasoning_content) {
+      reasoning += delta.reasoning_content;
+    }
+    if (typeof delta.content === "string") {
+      const stripped = delta.content.replace(/<\/?think>/gi, "");
+      if (stripped) {
+        if (!oaiContentBlockOpen) {
+          oaiContentBlockOpen = true;
+          writeEvent("content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } });
+          writeEvent("ping", { type: "ping" });
+        }
+        writeEvent("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: stripped } });
+        content += stripped;
+      }
+    }
+    if (choice.finish_reason && !oaiDone) {
+      oaiDone = true;
+      if (!oaiContentBlockOpen) {
+        oaiContentBlockOpen = true;
+        writeEvent("content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } });
+      }
+      writeEvent("content_block_stop", { type: "content_block_stop", index: 0 });
+      const stopReason = choice.finish_reason === "length" ? "max_tokens" : choice.finish_reason === "tool_calls" ? "tool_use" : "end_turn";
+      const outputTokens = parsed.usage?.completion_tokens ?? Math.max(1, Math.ceil(content.length / 4));
+      writeEvent("message_delta", { type: "message_delta", delta: { stop_reason: stopReason, stop_sequence: null }, usage: { output_tokens: outputTokens } });
+      writeEvent("message_stop", { type: "message_stop" });
+    }
+  };
+
+  const processLine = (line: string) => {
+    if (capturedSse.length < captureLimit) capturedSse += line + "\n";
+    if (format === "anthropic") { res.write(line + "\n"); return; }
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("data:")) return;
+    const data = trimmed.slice(5).trim();
+    if (!data) return;
+    if (format === "unknown") {
+      if (data === "[DONE]") { format = "oai"; return; }
+      try {
+        const peek = JSON.parse(data) as Record<string, unknown>;
+        if (peek.object === "chat.completion.chunk" || Array.isArray(peek.choices)) {
+          format = "oai";
+          writeEvent("message_start", { type: "message_start", message: { id: msgId, type: "message", role: "assistant", content: [], model, stop_reason: null, stop_sequence: null, usage: { input_tokens: 0, output_tokens: 1 } } });
+          handleOaiChunk(data);
+        } else {
+          format = "anthropic";
+          res.write(line + "\n");
+        }
+      } catch { /* skip unparseable first line */ }
+      return;
+    }
+    handleOaiChunk(data);
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    lineBuffer += decoder.decode(value, { stream: true });
+    const lines = lineBuffer.split("\n");
+    lineBuffer = lines.pop() ?? "";
+    for (const line of lines) processLine(line);
+  }
+  if (lineBuffer) processLine(lineBuffer);
+
+  if ((format as "oai" | "anthropic" | "unknown") === "oai" && !oaiDone) {
+    if (!oaiContentBlockOpen) {
+      oaiContentBlockOpen = true;
+      writeEvent("content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } });
+    }
+    writeEvent("content_block_stop", { type: "content_block_stop", index: 0 });
+    writeEvent("message_delta", { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: Math.max(1, Math.ceil(content.length / 4)) } });
+    writeEvent("message_stop", { type: "message_stop" });
+  }
+
+  return { capturedSse, content, reasoning, format };
+};
+
 app.post("/v1/messages", async (req, res) => {
   const config = getProxyConfig();
   const body = req.body as Record<string, unknown>;
@@ -899,35 +1010,34 @@ app.post("/v1/messages", async (req, res) => {
     const upstreamResponse = await fetch(upstreamUrl, { method: "POST", headers: forwardHeaders, body: JSON.stringify(forwardBody) });
 
     if (stream) {
-      const contentType = upstreamResponse.headers.get("content-type") ?? "text/event-stream; charset=utf-8";
       res.status(upstreamResponse.status);
-      res.setHeader("Content-Type", contentType);
+      res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
       res.setHeader("Cache-Control", "no-cache");
       res.setHeader("Connection", "keep-alive");
 
-      const captureLimit = 24000;
       let capturedSse = "";
-      const decoder = new TextDecoder();
+      let extractedContent = "";
+      let extractedReasoning = "";
 
       if (upstreamResponse.body) {
         const reader = upstreamResponse.body.getReader();
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          if (value) {
-            res.write(Buffer.from(value));
-            if (capturedSse.length < captureLimit) {
-              capturedSse += decoder.decode(value, { stream: true }).slice(0, captureLimit - capturedSse.length);
-            }
-          }
-        }
+        const msgId = `msg_${Date.now()}`;
+        const result = await handleMessagesStream(reader, res, msgId, model);
+        capturedSse = result.capturedSse;
+        extractedContent = result.format === "oai" ? result.content : extractAnthropicSseContent(capturedSse);
+        extractedReasoning = result.reasoning;
       }
       res.end();
 
-      const extractedContent = extractAnthropicSseContent(capturedSse);
       completeExchange(record.id, {
         responseStatus: upstreamResponse.ok ? "success" : "error",
-        responseBody: { stream: true, content: extractedContent, output_text: extractedContent, rawSse: capturedSse },
+        responseBody: {
+          stream: true,
+          content: extractedContent,
+          output_text: extractedContent,
+          ...(extractedReasoning ? { reasoning: extractedReasoning } : {}),
+          rawSse: capturedSse,
+        },
         upstreamUrl, upstreamStatusCode: upstreamResponse.status, durationMs: Date.now() - startedAt,
         errorMessage: upstreamResponse.ok ? undefined : `upstream returned ${upstreamResponse.status}`,
       });
@@ -1050,8 +1160,8 @@ app.use(
   })
 );
 
-// --- SPA fallback: serve index.html for any unmatched GET request ---
-if (existsSync(webDistPath)) {
+// --- SPA fallback: serve index.html for any unmatched GET request (production only) ---
+if (serveStatic) {
   const indexPath = resolve(webDistPath, "index.html");
   app.get("*", (_req, res) => {
     if (existsSync(indexPath)) {

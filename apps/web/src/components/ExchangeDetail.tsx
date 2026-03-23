@@ -98,7 +98,7 @@ export const ExchangeDetail = memo(function ExchangeDetail({
             ) : (
               <>
                 {reasoningText && (
-                  <details className="mb-3 rounded-lg border border-base-content/8 bg-base-200/60 text-xs">
+                  <details open className="mb-3 rounded-lg border border-base-content/8 bg-base-200/60 text-xs">
                     <summary className="cursor-pointer select-none px-3 py-1.5 text-[11px] text-base-content/40 hover:text-base-content/60">
                       思考过程 ({reasoningText.length} 字符)
                     </summary>

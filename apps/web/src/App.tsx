@@ -165,10 +165,17 @@ export const App = () => {
 
   const [renderCount, setRenderCount] = useState(RENDER_BATCH_SIZE);
   useEffect(() => { setRenderCount(RENDER_BATCH_SIZE); }, [filteredItems]);
+  const rafRef = useRef<number | null>(null);
   useEffect(() => {
     if (renderCount >= filteredItems.length) return;
-    const raf = requestAnimationFrame(() => setRenderCount((prev) => Math.min(prev + RENDER_BATCH_SIZE, filteredItems.length)));
-    return () => cancelAnimationFrame(raf);
+    if (rafRef.current !== null) return;
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null;
+      setRenderCount((prev) => Math.min(prev + RENDER_BATCH_SIZE, filteredItems.length));
+    });
+    return () => {
+      if (rafRef.current !== null) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
+    };
   }, [renderCount, filteredItems.length]);
   const visibleItems = filteredItems.slice(0, renderCount);
 
@@ -274,10 +281,16 @@ export const App = () => {
     } finally { setLoadingMore(false); }
   }, [nextCursor, loadingMore, fetchExchanges]);
 
-  const onListScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
-    const t = e.currentTarget;
-    if (t.scrollTop + t.clientHeight < t.scrollHeight - 200) return;
-    void loadMore();
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      (entries) => { if (entries[0]?.isIntersecting) void loadMore(); },
+      { threshold: 0.1 }
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
   }, [loadMore]);
 
   const onSelectItem = useCallback((id: string, checked: boolean) => {
@@ -548,7 +561,7 @@ export const App = () => {
       {/* split pane */}
       <div className="flex flex-1 overflow-hidden">
         <div className={`flex flex-col overflow-hidden transition-all duration-200 ${selectedItem ? "w-[360px] min-w-[240px] shrink-0" : "flex-1"}`}>
-          <div className="flex-1 overflow-y-auto border-r border-base-content/5" onScroll={onListScroll}>
+          <div className="flex-1 overflow-y-auto border-r border-base-content/5">
             <div className="space-y-1 p-2">
               {visibleItems.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-16 text-base-content/25 animate-fade-slide-in">
@@ -570,10 +583,11 @@ export const App = () => {
                 ))
               )}
               {nextCursor && (
-                <div className="flex justify-center py-2">
-                  <button className="btn btn-ghost btn-sm gap-1.5 text-xs" onClick={() => void loadMore()} disabled={loadingMore}>
-                    {loadingMore ? <><Loader2 size={12} className="animate-spin" /> 加载中…</> : <><ChevronDown size={12} /> 加载更多 ({totalCount - paginatedItems.length > 0 ? totalCount - paginatedItems.length : "..."} 条)</>}
-                  </button>
+                <div ref={sentinelRef} className="flex justify-center py-3">
+                  {loadingMore
+                    ? <span className="flex items-center gap-1.5 text-xs text-base-content/40"><Loader2 size={12} className="animate-spin" /> 加载中…</span>
+                    : <span className="text-[10px] text-base-content/20">{totalCount - paginatedItems.length > 0 ? `还有 ${totalCount - paginatedItems.length} 条` : ""}</span>
+                  }
                 </div>
               )}
             </div>

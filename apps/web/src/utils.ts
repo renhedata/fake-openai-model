@@ -45,6 +45,28 @@ export const safeStringify = (v: unknown) => {
   try { return JSON.stringify(v, null, 2); } catch { return String(v); }
 };
 
+/** Extract content and reasoning from OAI-format rawSse string */
+const extractFromOaiRawSse = (rawSse: string): { content: string; reasoning: string } => {
+  let content = "";
+  let reasoning = "";
+  for (const line of rawSse.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("data:")) continue;
+    const data = trimmed.slice(5).trim();
+    if (!data || data === "[DONE]") continue;
+    try {
+      const parsed = JSON.parse(data) as { choices?: Array<{ delta?: Record<string, unknown> }> };
+      const delta = parsed.choices?.[0]?.delta;
+      if (!delta) continue;
+      if (typeof delta.reasoning_content === "string") reasoning += delta.reasoning_content;
+      if (typeof delta.content === "string") {
+        content += delta.content.replace(/<\/?think>/gi, "");
+      }
+    } catch { continue; }
+  }
+  return { content: content.trim(), reasoning: reasoning.trim() };
+};
+
 export const getResponseText = (v: unknown): string => {
   if (!v || typeof v !== "object") return "";
   const r = v as {
@@ -76,6 +98,11 @@ export const getResponseText = (v: unknown): string => {
         .join("\n");
     }
   }
+  // Fallback: parse OAI-format rawSse if content fields are empty
+  const rr = v as Record<string, unknown>;
+  if (typeof rr.rawSse === "string" && rr.rawSse) {
+    return extractFromOaiRawSse(rr.rawSse).content;
+  }
   return "";
 };
 
@@ -89,6 +116,10 @@ export const getReasoningText = (v: unknown): string => {
   const msg = choices?.[0]?.message as Record<string, unknown> | undefined;
   if (msg && typeof msg.reasoning_content === "string" && msg.reasoning_content.trim()) {
     return msg.reasoning_content;
+  }
+  // Fallback: parse OAI-format rawSse
+  if (typeof r.rawSse === "string" && r.rawSse) {
+    return extractFromOaiRawSse(r.rawSse).reasoning;
   }
   return "";
 };
