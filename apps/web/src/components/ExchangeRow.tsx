@@ -10,7 +10,7 @@ export const ExchangeRow = memo(function ExchangeRow({
   item: ExchangeRecord;
   serial: number;
   expanded: boolean;
-  onToggle: () => void;
+  onToggle: (id: string) => void;
   selectMode: boolean;
   selected: boolean;
   onSelect: (id: string, checked: boolean) => void;
@@ -35,7 +35,7 @@ export const ExchangeRow = memo(function ExchangeRow({
       selected
         ? "border-primary/50 bg-primary/10"
         : expanded
-          ? "border-primary/30 bg-base-100 shadow-lg shadow-primary/5"
+          ? "border-primary/50 bg-primary/[0.08] shadow-md shadow-primary/10"
           : "border-base-content/5 bg-base-100 hover:border-base-content/10 hover:shadow-sm"
     }`}>
       <div className="flex w-full items-center gap-2 px-3 py-2">
@@ -53,7 +53,7 @@ export const ExchangeRow = memo(function ExchangeRow({
         <button
           type="button"
           className="flex flex-1 items-center gap-2 text-left transition-colors hover:bg-base-content/[0.02] min-w-0"
-          onClick={onToggle}
+          onClick={() => onToggle(item.id)}
         >
           {expanded
             ? <ChevronDown size={14} className="shrink-0 text-primary" />

@@ -7,7 +7,7 @@ import {
 import type { ApiType, DashboardEvent, ExchangeRecord, ModelRecord, ProxyConfig, UpstreamTestResult } from "./types";
 import { type PaginatedResult } from "./types";
 import {
-  PAGE_SIZE, RENDER_BATCH_SIZE,
+  PAGE_SIZE,
   apiTypeToPath, normalizeConfig, defaultConfig, emptyMeta,
   getCompletionTokens, getResponseText, getReasoningText,
 } from "./utils";
@@ -163,21 +163,7 @@ export const App = () => {
     return items;
   }, [paginatedItems, statusFilter, searchQuery]);
 
-  const [renderCount, setRenderCount] = useState(RENDER_BATCH_SIZE);
-  useEffect(() => { setRenderCount(RENDER_BATCH_SIZE); }, [filteredItems]);
-  const rafRef = useRef<number | null>(null);
-  useEffect(() => {
-    if (renderCount >= filteredItems.length) return;
-    if (rafRef.current !== null) return;
-    rafRef.current = requestAnimationFrame(() => {
-      rafRef.current = null;
-      setRenderCount((prev) => Math.min(prev + RENDER_BATCH_SIZE, filteredItems.length));
-    });
-    return () => {
-      if (rafRef.current !== null) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
-    };
-  }, [renderCount, filteredItems.length]);
-  const visibleItems = filteredItems.slice(0, renderCount);
+  const visibleItems = filteredItems;
 
   const totalCompletionTokens = useMemo(
     () => paginatedItems.reduce((sum, i) => sum + getCompletionTokens(i.responseBody), 0),
@@ -281,17 +267,23 @@ export const App = () => {
     } finally { setLoadingMore(false); }
   }, [nextCursor, loadingMore, fetchExchanges]);
 
-  const sentinelRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const el = sentinelRef.current;
+  const loadMoreRef = useRef(loadMore);
+  useEffect(() => { loadMoreRef.current = loadMore; }, [loadMore]);
+  const observerRef = useRef<IntersectionObserver | null>(null);
+  const sentinelRef = useCallback((el: HTMLDivElement | null) => {
+    observerRef.current?.disconnect();
+    observerRef.current = null;
     if (!el) return;
-    const observer = new IntersectionObserver(
-      (entries) => { if (entries[0]?.isIntersecting) void loadMore(); },
+    observerRef.current = new IntersectionObserver(
+      (entries) => { if (entries[0]?.isIntersecting) void loadMoreRef.current(); },
       { threshold: 0.1 }
     );
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [loadMore]);
+    observerRef.current.observe(el);
+  }, []);
+
+  const handleRowToggle = useCallback((id: string) => {
+    setExpandedId((p) => (p === id ? null : id));
+  }, []);
 
   const onSelectItem = useCallback((id: string, checked: boolean) => {
     setSelectedIds((prev) => { const next = new Set(prev); checked ? next.add(id) : next.delete(id); return next; });
@@ -576,7 +568,7 @@ export const App = () => {
                   <ExchangeRow
                     key={item.id} item={item} serial={totalCount - idx}
                     expanded={expandedId === item.id}
-                    onToggle={() => setExpandedId((p) => (p === item.id ? null : item.id))}
+                    onToggle={handleRowToggle}
                     selectMode={selectMode} selected={selectedIds.has(item.id)} onSelect={onSelectItem}
                     compact={!!selectedItem}
                   />
