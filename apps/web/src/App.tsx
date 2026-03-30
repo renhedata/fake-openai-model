@@ -126,7 +126,7 @@ export const App = () => {
       es.onmessage = (ev) => {
         try {
           const data = JSON.parse(ev.data) as DashboardEvent;
-          const meta = data.meta ?? (data.state ? { stats: data.state.stats, config: data.state.config, models: data.state.models } : null);
+          const meta = data.meta ?? null;
           if (meta) {
             const nc = normalizeConfig(meta.config);
             setDashboardMeta({ stats: meta.stats, config: nc, models: meta.models });
@@ -162,8 +162,6 @@ export const App = () => {
     );
     return items;
   }, [paginatedItems, statusFilter, searchQuery]);
-
-  const visibleItems = filteredItems;
 
   const totalCompletionTokens = useMemo(
     () => paginatedItems.reduce((sum, i) => sum + getCompletionTokens(i.responseBody), 0),
@@ -381,14 +379,14 @@ export const App = () => {
   const { stats } = dashboardMeta;
 
   const selectedItem = useMemo(
-    () => (expandedId ? visibleItems.find((i) => i.id === expandedId) ?? null : null),
-    [expandedId, visibleItems]
+    () => (expandedId ? filteredItems.find((i) => i.id === expandedId) ?? null : null),
+    [expandedId, filteredItems]
   );
   const selectedSerial = useMemo(() => {
     if (!selectedItem) return 0;
-    const idx = visibleItems.indexOf(selectedItem);
+    const idx = filteredItems.indexOf(selectedItem);
     return idx === -1 ? 0 : totalCount - idx;
-  }, [selectedItem, visibleItems, totalCount]);
+  }, [selectedItem, filteredItems, totalCount]);
 
   useEffect(() => {
     const h = (e: KeyboardEvent) => { if (e.key === "Escape" && expandedId) setExpandedId(null); };
@@ -555,7 +553,7 @@ export const App = () => {
         <div className={`flex flex-col overflow-hidden transition-all duration-200 ${selectedItem ? "w-[360px] min-w-[240px] shrink-0" : "flex-1"}`}>
           <div className="flex-1 overflow-y-auto border-r border-base-content/5">
             <div className="space-y-1 p-2">
-              {visibleItems.length === 0 ? (
+              {filteredItems.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-16 text-base-content/25 animate-fade-slide-in">
                   <Radio size={28} className="mb-2 opacity-30" />
                   <p className="text-sm">{searchQuery || statusFilter !== "all" || hasDateFilter ? "无匹配记录" : "等待请求中…"}</p>
@@ -564,7 +562,7 @@ export const App = () => {
                   )}
                 </div>
               ) : (
-                visibleItems.map((item, idx) => (
+                filteredItems.map((item, idx) => (
                   <ExchangeRow
                     key={item.id} item={item} serial={totalCount - idx}
                     expanded={expandedId === item.id}

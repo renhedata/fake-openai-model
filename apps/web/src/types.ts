@@ -36,13 +36,6 @@ export type ExchangeStats = {
 
 export type ModelRecord = { id: string; object: string; created: number; owned_by: string };
 
-export type DashboardState = {
-  items: ExchangeRecord[];
-  stats: ExchangeStats;
-  config: ProxyConfig;
-  models: ModelRecord[];
-};
-
 export type DashboardMeta = {
   stats: ExchangeStats;
   config: ProxyConfig;
@@ -53,8 +46,6 @@ export type DashboardEvent = {
   type: "snapshot" | "update";
   latest?: ExchangeRecord | null;
   meta?: DashboardMeta;
-  /** @deprecated */
-  state?: DashboardState;
 };
 
 export type UpstreamTestResult = {

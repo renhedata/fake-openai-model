@@ -79,9 +79,11 @@ export const ExchangeDetail = memo(function ExchangeDetail({
               </span>
               <CopyButton text={lastUserMsg} />
             </div>
-            {messages.length > 0
-              ? <RoleMessages messages={messages} />
-              : <div className="rounded-lg bg-base-200/50 p-3 text-sm leading-relaxed text-base-content/70 whitespace-pre-wrap">{item.prompt || "(空)"}</div>}
+            <div className="max-h-[60vh] overflow-y-auto pr-1">
+              {messages.length > 0
+                ? <RoleMessages messages={messages} />
+                : <div className="rounded-lg bg-base-200/50 p-3 text-sm leading-relaxed text-base-content/70 whitespace-pre-wrap">{item.prompt || "(空)"}</div>}
+            </div>
           </div>
 
           <div className="p-4">
@@ -96,19 +98,19 @@ export const ExchangeDetail = memo(function ExchangeDetail({
                 <Loader2 size={14} className="animate-spin" /> 等待响应…
               </p>
             ) : (
-              <>
+              <div className="max-h-[60vh] overflow-y-auto pr-1">
                 {reasoningText && (
-                  <details open className="mb-3 rounded-lg border border-base-content/8 bg-base-200/60 text-xs">
+                  <details className="mb-3 rounded-lg border border-base-content/8 bg-base-200/60 text-xs">
                     <summary className="cursor-pointer select-none px-3 py-1.5 text-[11px] text-base-content/40 hover:text-base-content/60">
                       思考过程 ({reasoningText.length} 字符)
                     </summary>
-                    <div className="border-t border-base-content/5 px-3 py-2">
+                    <div className="max-h-64 overflow-y-auto border-t border-base-content/5 px-3 py-2">
                       <MarkdownSurface markdown={reasoningText} />
                     </div>
                   </details>
                 )}
                 <MarkdownSurface markdown={responseMd} />
-              </>
+              </div>
             )}
           </div>
         </div>
@@ -121,11 +123,11 @@ export const ExchangeDetail = memo(function ExchangeDetail({
           <div className="grid gap-0 lg:grid-cols-2 pb-4">
             <div className="p-4 lg:border-r border-base-content/5">
               <div className="mb-1 text-[10px] uppercase tracking-wider text-base-content/30">Request Body</div>
-              <pre className="overflow-auto rounded-lg bg-base-300 p-3 text-[11px] text-base-content/60 mono">{safeStringify(item.requestBody)}</pre>
+              <pre className="max-h-[40rem] overflow-auto rounded-lg bg-base-300 p-3 text-[11px] text-base-content/60 mono">{safeStringify(item.requestBody)}</pre>
             </div>
             <div className="p-4">
               <div className="mb-1 text-[10px] uppercase tracking-wider text-base-content/30">Response Body</div>
-              <pre className="overflow-auto rounded-lg bg-base-300 p-3 text-[11px] text-base-content/60 mono">{safeStringify(item.responseBody)}</pre>
+              <pre className="max-h-[40rem] overflow-auto rounded-lg bg-base-300 p-3 text-[11px] text-base-content/60 mono">{safeStringify(item.responseBody)}</pre>
             </div>
           </div>
         </details>

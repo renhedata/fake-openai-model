@@ -45,13 +45,6 @@ export type ExchangeStats = {
   totalCaptureOnly: number;
 };
 
-export type DashboardState = {
-  items: ExchangeRecord[];
-  stats: ExchangeStats;
-  config: ProxyConfig;
-  models: ModelRecord[];
-};
-
 /** Lightweight version without the heavy items array — used for SSE pushes */
 export type DashboardMeta = {
   stats: ExchangeStats;
@@ -356,13 +349,6 @@ export const completeExchange = (
   return target;
 };
 
-export const getExchanges = () => {
-  const rows = db.prepare("SELECT * FROM exchanges ORDER BY created_at DESC, id DESC LIMIT 200").all() as Array<
-    Record<string, unknown>
-  >;
-  return rows.map(mapExchangeRow);
-};
-
 export type PaginatedResult = {
   items: ExchangeRecord[];
   nextCursor: string | null;
@@ -382,9 +368,12 @@ export const getExchangesPaginated = (params: {
   const args: unknown[] = [];
 
   if (params.cursor) {
-    // cursor is the created_at of the last item on the current page
+    // cursor is "created_at||id" of the last item on the current page
+    const sepIdx = params.cursor.indexOf("||");
+    const cursorAt = sepIdx >= 0 ? params.cursor.slice(0, sepIdx) : params.cursor;
+    const cursorId = sepIdx >= 0 ? params.cursor.slice(sepIdx + 2) : "";
     conditions.push("(created_at < ? OR (created_at = ? AND id < ?))");
-    args.push(params.cursor, params.cursor, params.cursor);
+    args.push(cursorAt, cursorAt, cursorId);
   }
   if (params.dateFrom) {
     conditions.push("created_at >= ?");
@@ -424,7 +413,7 @@ export const getExchangesPaginated = (params: {
   const hasMore = rows.length > limit;
   const items = (hasMore ? rows.slice(0, limit) : rows).map(mapExchangeRow);
   const lastItem = items[items.length - 1];
-  const nextCursor = hasMore && lastItem ? lastItem.createdAt : null;
+  const nextCursor = hasMore && lastItem ? `${lastItem.createdAt}||${lastItem.id}` : null;
 
   return { items, nextCursor, total };
 };
@@ -566,13 +555,51 @@ export const getDashboardMeta = (): DashboardMeta => ({
   models: getModels()
 });
 
-/** Full state including items — used only for initial REST fetch, not SSE */
-export const getDashboardState = (): DashboardState => ({
-  items: [...getExchanges()],
-  stats: getExchangeStats(),
-  config: getProxyConfig(),
-  models: getModels()
-});
+export type SeedRecord = {
+  mode: ProxyMode;
+  model: string;
+  prompt: string;
+  promptTokens: number;
+  requestBody: unknown;
+  responseStatus: "success" | "error";
+  responseBody?: unknown;
+  errorMessage?: string;
+  upstreamStatusCode?: number;
+  durationMs?: number;
+};
+
+/** Insert many exchanges in a single transaction with one SSE emit at the end */
+export const bulkSeedExchanges = (records: SeedRecord[]): number => {
+  const stmt = db.prepare(
+    `INSERT INTO exchanges (id, mode, model, prompt, prompt_tokens, request_body,
+       created_at, completed_at, response_status, response_body,
+       error_message, upstream_status_code, duration_ms)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  );
+  const now = Date.now();
+  db.exec("BEGIN");
+  try {
+    for (let i = 0; i < records.length; i++) {
+      const r = records[i];
+      const id = `x_${now - i * 10}_${Math.random().toString(36).slice(2, 8)}`;
+      const createdAt = new Date(now - i * 1000).toISOString();
+      const completedAt = new Date(now - i * 1000 + (r.durationMs ?? 0)).toISOString();
+      stmt.run(
+        id, r.mode, r.model, r.prompt, r.promptTokens,
+        JSON.stringify(r.requestBody ?? null),
+        createdAt, completedAt, r.responseStatus,
+        r.responseBody === undefined ? null : JSON.stringify(r.responseBody),
+        r.errorMessage ?? null, r.upstreamStatusCode ?? null, r.durationMs ?? null
+      );
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  emit(null);
+  return records.length;
+};
 
 export const subscribeExchangeUpdated = (listener: (latest: ExchangeRecord | null, meta: DashboardMeta) => void) => {
   listeners.add(listener);

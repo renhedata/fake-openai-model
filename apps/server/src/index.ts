@@ -2,8 +2,6 @@ import cors from "cors";
 import express from "express";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { createExpressMiddleware } from "@trpc/server/adapters/express";
-import { appRouter } from "./router.js";
 import {
   createFakeCompletion,
   createFakeStreamText,
@@ -12,28 +10,46 @@ import {
 } from "./router.js";
 import {
   addExchange,
+  bulkSeedExchanges,
   completeExchange,
   deleteExchanges,
   deleteAllExchanges,
   getDashboardMeta,
-  getDashboardState,
   getExchangesPaginated,
   getModels,
   getProxyConfig,
   setModels,
   setProxyConfig,
   subscribeExchangeUpdated,
+  type SeedRecord,
 } from "./state.js";
 
 const app = express();
 const port = Number(process.env.PORT ?? 3001);
 
-app.use(cors());
+app.use(cors({
+  origin: (origin, callback) => {
+    const allowedOrigin = process.env.CORS_ORIGIN;
+    // If CORS_ORIGIN=* or unset (open/self-hosted), allow all
+    if (!allowedOrigin || allowedOrigin === "*") {
+      callback(null, true);
+      return;
+    }
+    // Allow same-origin requests (no Origin header) and configured/localhost origins
+    if (!origin || origin === allowedOrigin || /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error("CORS: origin not allowed"));
+    }
+  }
+}));
 app.use(express.json({ limit: "50mb" }));
 
 // --- Serve static web assets (production only) ---
 const webDistPath = resolve(import.meta.dirname ?? __dirname, "../../web/dist");
 const serveStatic = process.env.NODE_ENV !== "development" && existsSync(webDistPath);
+const indexPath = resolve(webDistPath, "index.html");
+const indexExists = serveStatic && existsSync(indexPath);
 if (serveStatic) {
   app.use(express.static(webDistPath, { index: false }));
 }
@@ -80,6 +96,7 @@ app.get("/v1/models", async (req, res) => {
         headers: {
           ...(authorization ? { authorization } : {}),
         },
+        signal: AbortSignal.timeout(30_000),
       });
       const text = await upstreamRes.text();
       const contentType = upstreamRes.headers.get("content-type") ?? "";
@@ -100,77 +117,70 @@ app.get("/v1/models", async (req, res) => {
   });
 });
 
-app.post("/dev/seed", (req, res) => {
-  const count = Math.min(Number((req.query.count as string) ?? "80"), 500);
-  const models = ["gpt-4o", "gpt-4o-mini", "claude-3-5-sonnet", "claude-3-haiku", "gemini-1.5-pro", "fake-gpt-4o-mini"];
-  const prompts = [
-    "帮我写一个 Python 冒泡排序",
-    "解释一下什么是 Transformer 架构",
-    "用 TypeScript 实现一个防抖函数",
-    "写一首关于秋天的七言绝句",
-    "What is the difference between REST and GraphQL?",
-    "Summarize the key principles of clean code",
-    "帮我优化这段 SQL 查询：SELECT * FROM orders WHERE status = 'pending'",
-    "解释 React 的 useEffect 和 useLayoutEffect 的区别",
-    "写一个 Rust 的链表实现",
-    "如何设计一个高并发的消息队列系统？",
-    "Explain the CAP theorem with examples",
-    "帮我写一个正则表达式匹配中国手机号",
-    "What are the SOLID principles in OOP?",
-    "给我出 5 道关于二叉树的算法题",
-    "帮我写一个 Docker Compose 配置：包含 nginx + postgres + redis",
-  ];
-  const responses = [
-    "这是一个假的模型响应，用于测试界面显示效果。",
-    "以下是示例回答内容，实际响应会包含更多信息。",
-    "测试数据：此响应由 /dev/seed 端点自动生成，模拟真实 API 响应格式。",
-    "Here is a sample response for testing purposes. The actual model would provide a more detailed answer.",
-    "```python\ndef bubble_sort(arr):\n    n = len(arr)\n    for i in range(n):\n        for j in range(0, n-i-1):\n            if arr[j] > arr[j+1]:\n                arr[j], arr[j+1] = arr[j+1], arr[j]\n    return arr\n```",
-  ];
+if (process.env.NODE_ENV !== "production") {
+  app.post("/dev/seed", (req, res) => {
+    const count = Math.min(Number((req.query.count as string) ?? "80"), 500);
+    const models = ["gpt-4o", "gpt-4o-mini", "claude-3-5-sonnet", "claude-3-haiku", "gemini-1.5-pro", "fake-gpt-4o-mini"];
+    const prompts = [
+      "帮我写一个 Python 冒泡排序",
+      "解释一下什么是 Transformer 架构",
+      "用 TypeScript 实现一个防抖函数",
+      "写一首关于秋天的七言绝句",
+      "What is the difference between REST and GraphQL?",
+      "Summarize the key principles of clean code",
+      "帮我优化这段 SQL 查询：SELECT * FROM orders WHERE status = 'pending'",
+      "解释 React 的 useEffect 和 useLayoutEffect 的区别",
+      "写一个 Rust 的链表实现",
+      "如何设计一个高并发的消息队列系统？",
+      "Explain the CAP theorem with examples",
+      "帮我写一个正则表达式匹配中国手机号",
+      "What are the SOLID principles in OOP?",
+      "给我出 5 道关于二叉树的算法题",
+      "帮我写一个 Docker Compose 配置：包含 nginx + postgres + redis",
+    ];
+    const responses = [
+      "这是一个假的模型响应，用于测试界面显示效果。",
+      "以下是示例回答内容，实际响应会包含更多信息。",
+      "测试数据：此响应由 /dev/seed 端点自动生成，模拟真实 API 响应格式。",
+      "Here is a sample response for testing purposes. The actual model would provide a more detailed answer.",
+      "```python\ndef bubble_sort(arr):\n    n = len(arr)\n    for i in range(n):\n        for j in range(0, n-i-1):\n            if arr[j] > arr[j+1]:\n                arr[j], arr[j+1] = arr[j+1], arr[j]\n    return arr\n```",
+    ];
 
-  const statuses: Array<"success" | "error"> = ["success", "success", "success", "success", "error"];
-  let inserted = 0;
+    const statuses: Array<"success" | "error"> = ["success", "success", "success", "success", "error"];
+    const records: SeedRecord[] = [];
 
-  for (let i = 0; i < count; i++) {
-    const model = models[Math.floor(Math.random() * models.length)];
-    const prompt = prompts[Math.floor(Math.random() * prompts.length)];
-    const status = statuses[Math.floor(Math.random() * statuses.length)];
-    const promptTokens = Math.floor(Math.random() * 800) + 50;
-    const completionTokens = Math.floor(Math.random() * 1200) + 100;
-    const durationMs = Math.floor(Math.random() * 4000) + 200;
-    const response = responses[Math.floor(Math.random() * responses.length)];
-
-    const record = addExchange({
-      mode: Math.random() > 0.5 ? "capture_only" : "forward",
-      model,
-      prompt,
-      promptTokens,
-      requestBody: {
+    for (let i = 0; i < count; i++) {
+      const model = models[Math.floor(Math.random() * models.length)];
+      const prompt = prompts[Math.floor(Math.random() * prompts.length)];
+      const status = statuses[Math.floor(Math.random() * statuses.length)];
+      const promptTokens = Math.floor(Math.random() * 800) + 50;
+      const completionTokens = Math.floor(Math.random() * 1200) + 100;
+      const durationMs = Math.floor(Math.random() * 4000) + 200;
+      const response = responses[Math.floor(Math.random() * responses.length)];
+      records.push({
+        mode: Math.random() > 0.5 ? "capture_only" : "forward",
         model,
-        messages: [{ role: "user", content: prompt }],
-        temperature: 0.7,
-        max_tokens: 2048,
-      },
-    });
+        prompt,
+        promptTokens,
+        requestBody: { model, messages: [{ role: "user", content: prompt }], temperature: 0.7, max_tokens: 2048 },
+        responseStatus: status,
+        responseBody: status === "success" ? {
+          id: `chatcmpl-seed-${i}`,
+          object: "chat.completion",
+          model,
+          choices: [{ index: 0, message: { role: "assistant", content: response }, finish_reason: "stop" }],
+          usage: { prompt_tokens: promptTokens, completion_tokens: completionTokens, total_tokens: promptTokens + completionTokens },
+        } : undefined,
+        errorMessage: status === "error" ? "upstream timeout: connection refused" : undefined,
+        upstreamStatusCode: status === "success" ? 200 : 503,
+        durationMs,
+      });
+    }
 
-    completeExchange(record.id, {
-      responseStatus: status,
-      responseBody: status === "success" ? {
-        id: `chatcmpl-seed-${i}`,
-        object: "chat.completion",
-        model,
-        choices: [{ index: 0, message: { role: "assistant", content: response }, finish_reason: "stop" }],
-        usage: { prompt_tokens: promptTokens, completion_tokens: completionTokens, total_tokens: promptTokens + completionTokens },
-      } : undefined,
-      errorMessage: status === "error" ? "upstream timeout: connection refused" : undefined,
-      upstreamStatusCode: status === "success" ? 200 : 503,
-      durationMs,
-    });
-    inserted++;
-  }
-
-  res.json({ ok: true, inserted });
-});
+    const inserted = bulkSeedExchanges(records);
+    res.json({ ok: true, inserted });
+  });
+}
 
 app.get("/events/prompts", (req, res) => {
   res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
@@ -310,7 +320,8 @@ const HOP_BY_HOP_HEADERS = new Set([
 
 const buildForwardHeaders = (
   req: express.Request,
-  apiKey: string
+  apiKey: string,
+  authStyle: "bearer" | "x-api-key" = "bearer"
 ): Record<string, string> => {
   const headers: Record<string, string> = {};
   for (const [key, value] of Object.entries(req.headers)) {
@@ -321,11 +332,19 @@ const buildForwardHeaders = (
       headers[key] = value.join(", ");
     }
   }
-  const auth = resolveAuthorization(req, apiKey);
-  if (auth) {
-    headers["authorization"] = auth;
+  if (authStyle === "x-api-key") {
+    if (apiKey.trim()) {
+      headers["x-api-key"] = apiKey.trim();
+      delete headers["authorization"];
+    }
+    if (!headers["anthropic-version"]) headers["anthropic-version"] = "2023-06-01";
   } else {
-    delete headers["authorization"];
+    const auth = resolveAuthorization(req, apiKey);
+    if (auth) {
+      headers["authorization"] = auth;
+    } else {
+      delete headers["authorization"];
+    }
   }
   if (!headers["content-type"]) {
     headers["content-type"] = "application/json";
@@ -357,6 +376,7 @@ app.post("/proxy/models/refresh", async (req, res) => {
       headers: {
         ...(authorization ? { authorization } : {}),
       },
+      signal: AbortSignal.timeout(30_000),
     });
     const text = await upstreamResponse.text();
     const payload = tryParseJson(text);
@@ -453,6 +473,7 @@ app.post("/proxy/test", async (req, res) => {
         ...(authorization ? { authorization } : {}),
       },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(30_000),
     });
     const text = await upstreamResponse.text();
     const payload = tryParseJson(text);
@@ -488,23 +509,30 @@ const tryParseJson = (value: string) => {
   }
 };
 
-/** Extract prompt text directly from raw body - no schema needed */
-const extractPromptText = (body: Record<string, unknown>): { captured: string; promptTokens: number } => {
-  if (!Array.isArray(body.messages)) return { captured: "", promptTokens: 1 };
+/** Extract prompt text from raw body. format="anthropic" also reads body.system and only captures user messages. */
+const extractPromptText = (
+  body: Record<string, unknown>,
+  format: "oai" | "anthropic" = "oai"
+): { captured: string; promptTokens: number } => {
   const parts: string[] = [];
-  for (const m of body.messages) {
-    if (!m || typeof m !== "object") continue;
-    const msg = m as Record<string, unknown>;
-    if (msg.role !== "user" && msg.role !== "system") continue;
-    if (typeof msg.content === "string") {
-      parts.push(msg.content);
-    } else if (Array.isArray(msg.content)) {
-      for (const part of msg.content) {
-        if (typeof part === "string") parts.push(part);
-        else if (part && typeof part === "object") {
-          const p = part as Record<string, unknown>;
-          if (typeof p.text === "string") parts.push(p.text);
-          else if (typeof p.input_text === "string") parts.push(p.input_text);
+  if (format === "anthropic" && typeof body.system === "string" && body.system.trim()) {
+    parts.push(body.system.trim());
+  }
+  if (Array.isArray(body.messages)) {
+    for (const m of body.messages) {
+      if (!m || typeof m !== "object") continue;
+      const msg = m as Record<string, unknown>;
+      if (format === "oai" ? (msg.role !== "user" && msg.role !== "system") : msg.role !== "user") continue;
+      if (typeof msg.content === "string") {
+        parts.push(msg.content);
+      } else if (Array.isArray(msg.content)) {
+        for (const part of msg.content) {
+          if (typeof part === "string") parts.push(part);
+          else if (part && typeof part === "object") {
+            const p = part as Record<string, unknown>;
+            if (typeof p.text === "string") parts.push(p.text);
+            else if (format === "oai" && typeof p.input_text === "string") parts.push(p.input_text);
+          }
         }
       }
     }
@@ -513,86 +541,128 @@ const extractPromptText = (body: Record<string, unknown>): { captured: string; p
   return { captured, promptTokens: Math.max(1, Math.ceil(Math.max(1, captured.length) / 4)) };
 };
 
-const extractAssistantContentFromSse = (raw: string): { content: string; reasoning: string } => {
-  let content = "";
-  let reasoning = "";
-  const toolCalls: Array<{
-    index: number;
-    id?: string;
-    type?: string;
-    function: { name: string; arguments: string };
-  }> = [];
+type StoredToolCall = { id?: string; name: string; arguments: string };
 
-  for (const line of raw.split("\n")) {
+/** Stateful inline extractor for OpenAI-format SSE streams (no size limit). */
+const createOaiSseExtractor = () => {
+  let rawContent = "";
+  let reasoning = "";
+  const toolCalls: Array<{ index: number; id?: string; function: { name: string; arguments: string } }> = [];
+  let lineBuffer = "";
+
+  const processLine = (line: string) => {
     const trimmed = line.trim();
-    if (!trimmed.startsWith("data:")) {
-      continue;
-    }
+    if (!trimmed.startsWith("data:")) return;
     const data = trimmed.slice(5).trim();
-    if (!data || data === "[DONE]") {
-      continue;
-    }
+    if (!data || data === "[DONE]") return;
     try {
       const parsed = JSON.parse(data) as {
         choices?: Array<{
-          delta?: {
-            content?: string;
-            tool_calls?: Array<{
-              index?: number;
-              id?: string;
-              type?: string;
-              function?: { name?: string; arguments?: string };
-            }>;
-          };
+          delta?: Record<string, unknown>;
           message?: { content?: string };
         }>;
       };
       const delta = parsed.choices?.[0]?.delta;
-      if (delta?.content && typeof delta.content === "string") {
-        // Strip <think>/<\/think> markers (some models send them as content deltas)
-        const stripped = delta.content.replace(/<\/?think>/gi, "");
-        content += stripped;
-      }
-      // reasoning_content goes to a separate field, not mixed into content
-      const reasoningDelta = (delta as Record<string, unknown> | undefined)?.reasoning_content;
-      if (typeof reasoningDelta === "string") {
-        reasoning += reasoningDelta;
-      }
-      // Accumulate tool_calls from streaming deltas
-      if (Array.isArray(delta?.tool_calls)) {
-        for (const tc of delta.tool_calls) {
-          const idx = tc.index ?? 0;
-          if (!toolCalls[idx]) {
-            toolCalls[idx] = {
-              index: idx,
-              id: tc.id,
-              type: tc.type ?? "function",
-              function: { name: "", arguments: "" },
-            };
+      if (delta) {
+        if (typeof delta.content === "string") rawContent += delta.content;
+        if (typeof delta.reasoning_content === "string") reasoning += delta.reasoning_content;
+        if (Array.isArray(delta.tool_calls)) {
+          for (const tc of delta.tool_calls as Array<{ index?: number; id?: string; function?: { name?: string; arguments?: string } }>) {
+            const idx = tc.index ?? 0;
+            if (!toolCalls[idx]) toolCalls[idx] = { index: idx, id: tc.id, function: { name: "", arguments: "" } };
+            if (tc.id) toolCalls[idx].id = tc.id;
+            if (tc.function?.name) toolCalls[idx].function.name += tc.function.name;
+            if (tc.function?.arguments) toolCalls[idx].function.arguments += tc.function.arguments;
           }
-          if (tc.id) toolCalls[idx].id = tc.id;
-          if (tc.function?.name) toolCalls[idx].function.name += tc.function.name;
-          if (tc.function?.arguments) toolCalls[idx].function.arguments += tc.function.arguments;
         }
       }
-      const messageContent = parsed.choices?.[0]?.message?.content;
-      if (typeof messageContent === "string") {
-        content += messageContent;
-      }
-    } catch {
-      continue;
-    }
-  }
+      // Non-streaming message format
+      const msgContent = parsed.choices?.[0]?.message?.content;
+      if (typeof msgContent === "string") rawContent += msgContent;
+    } catch { /* ignore */ }
+  };
 
-  let result = content.trim();
-  if (toolCalls.length > 0) {
-    const tcSummary = toolCalls
+  const feed = (chunk: string) => {
+    lineBuffer += chunk;
+    const lines = lineBuffer.split("\n");
+    lineBuffer = lines.pop() ?? "";
+    for (const line of lines) processLine(line);
+  };
+
+  const finish = (): { content: string; reasoning: string; toolCalls: StoredToolCall[] } => {
+    if (lineBuffer) { processLine(lineBuffer); lineBuffer = ""; }
+    // Extract <think>…</think> blocks into reasoning (models like QwQ / DeepSeek)
+    let thinkReasoning = "";
+    const thinkRe = /<think>([\s\S]*?)<\/think>/gi;
+    let m: RegExpExecArray | null;
+    while ((m = thinkRe.exec(rawContent)) !== null) {
+      thinkReasoning += (thinkReasoning ? "\n\n" : "") + m[1];
+    }
+    const content = rawContent
+      .replace(/<think>[\s\S]*?<\/think>/gi, "")
+      .replace(/<\/?think>/gi, "")
+      .trim();
+    const finalReasoning = [reasoning, thinkReasoning].filter(Boolean).join("\n\n").trim();
+    const stored: StoredToolCall[] = toolCalls
       .filter(Boolean)
-      .map((tc) => `${tc.function.name}(${tc.function.arguments})`)
-      .join("; ");
-    result = result ? `${result}\n\n[Tool Calls] ${tcSummary}` : `[Tool Calls] ${tcSummary}`;
-  }
-  return { content: result, reasoning: reasoning.trim() };
+      .map((tc) => ({ id: tc.id, name: tc.function.name, arguments: tc.function.arguments }));
+    return { content, reasoning: finalReasoning, toolCalls: stored };
+  };
+
+  return { feed, finish };
+};
+
+/** Stateful inline extractor for Anthropic-format SSE streams. */
+const createAnthropicSseExtractor = () => {
+  type Block = { type: string; text: string; thinking: string; name: string; id: string; input: string };
+  const blocks: Block[] = [];
+  let lineBuffer = "";
+
+  const processLine = (line: string) => {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("data:")) return;
+    const data = trimmed.slice(5).trim();
+    if (!data) return;
+    try {
+      const parsed = JSON.parse(data) as Record<string, unknown>;
+      if (parsed.type === "content_block_start") {
+        const idx = parsed.index as number;
+        const cb = parsed.content_block as Record<string, unknown>;
+        blocks[idx] = { type: String(cb.type ?? ""), text: "", thinking: "", name: String(cb.name ?? ""), id: String(cb.id ?? ""), input: "" };
+      } else if (parsed.type === "content_block_delta") {
+        const idx = parsed.index as number;
+        const block = blocks[idx];
+        if (!block) return;
+        const delta = parsed.delta as Record<string, unknown>;
+        if (delta.type === "text_delta" && typeof delta.text === "string") block.text += delta.text;
+        else if (delta.type === "thinking_delta" && typeof delta.thinking === "string") block.thinking += delta.thinking;
+        else if (delta.type === "input_json_delta" && typeof delta.partial_json === "string") block.input += delta.partial_json;
+      }
+    } catch { /* ignore */ }
+  };
+
+  const feed = (chunk: string) => {
+    lineBuffer += chunk;
+    const lines = lineBuffer.split("\n");
+    lineBuffer = lines.pop() ?? "";
+    for (const line of lines) processLine(line);
+  };
+
+  const finish = (): { content: string; reasoning: string; toolCalls: StoredToolCall[] } => {
+    if (lineBuffer) { processLine(lineBuffer); lineBuffer = ""; }
+    let content = "";
+    let reasoning = "";
+    const toolCalls: StoredToolCall[] = [];
+    for (const block of blocks) {
+      if (!block) continue;
+      if (block.type === "text" && block.text) content += (content ? "\n" : "") + block.text;
+      if (block.type === "thinking" && block.thinking) reasoning += (reasoning ? "\n\n" : "") + block.thinking;
+      if (block.type === "tool_use") toolCalls.push({ id: block.id, name: block.name, arguments: block.input });
+    }
+    return { content: content.trim(), reasoning: reasoning.trim(), toolCalls };
+  };
+
+  return { feed, finish };
 };
 
 app.post("/v1/chat/completions", async (req, res) => {
@@ -676,10 +746,7 @@ app.post("/v1/chat/completions", async (req, res) => {
       return;
     }
 
-    const completion = createFakeCompletion(
-      { model, messages: [], stream: false },
-      promptTokens,
-    );
+    const completion = createFakeCompletion({ model }, promptTokens);
     completeExchange(record.id, {
       responseStatus: "success",
       responseBody: completion,
@@ -724,6 +791,7 @@ app.post("/v1/chat/completions", async (req, res) => {
       method: "POST",
       headers: forwardHeaders,
       body: JSON.stringify(forwardBody),
+      signal: AbortSignal.timeout(120_000),
     });
 
     if (stream) {
@@ -742,53 +810,42 @@ app.post("/v1/chat/completions", async (req, res) => {
         if (val) res.setHeader(key, val);
       }
 
-      const captureLimit = 24000;
+      const RAW_SSE_LIMIT = 32_000;
       let capturedSse = "";
       const decoder = new TextDecoder();
+      const extractor = createOaiSseExtractor();
 
       if (upstreamResponse.body) {
         const reader = upstreamResponse.body.getReader();
         while (true) {
           const { done, value } = await reader.read();
-          if (done) {
-            break;
-          }
-          if (!value) {
-            continue;
-          }
+          if (done) break;
+          if (!value) continue;
           res.write(Buffer.from(value));
-          if (capturedSse.length < captureLimit) {
-            const decoded = decoder.decode(value, { stream: true });
-            const remaining = captureLimit - capturedSse.length;
-            capturedSse += decoded.slice(0, remaining);
-          } else {
-            decoder.decode(value, { stream: true });
-          }
+          const chunk = decoder.decode(value, { stream: true });
+          extractor.feed(chunk);
+          if (capturedSse.length < RAW_SSE_LIMIT) capturedSse += chunk.slice(0, RAW_SSE_LIMIT - capturedSse.length);
         }
       }
-
-      if (capturedSse.length < captureLimit) {
-        const tail = decoder.decode();
-        const remaining = captureLimit - capturedSse.length;
-        capturedSse += tail.slice(0, remaining);
-      }
+      const tail = decoder.decode();
+      extractor.feed(tail);
+      if (capturedSse.length < RAW_SSE_LIMIT) capturedSse += tail.slice(0, RAW_SSE_LIMIT - capturedSse.length);
 
       res.end();
-      const extracted = extractAssistantContentFromSse(capturedSse);
+      const extracted = extractor.finish();
       completeExchange(record.id, {
         responseStatus: upstreamResponse.ok ? "success" : "error",
         responseBody: {
           stream: true,
           assistant: extracted.content,
           ...(extracted.reasoning ? { reasoning: extracted.reasoning } : {}),
+          ...(extracted.toolCalls.length > 0 ? { toolCalls: extracted.toolCalls } : {}),
           rawSse: capturedSse,
         },
         upstreamUrl,
         upstreamStatusCode: upstreamResponse.status,
         durationMs: Date.now() - startedAt,
-        errorMessage: upstreamResponse.ok
-          ? undefined
-          : `upstream returned ${upstreamResponse.status}`,
+        errorMessage: upstreamResponse.ok ? undefined : `upstream returned ${upstreamResponse.status}`,
       });
       return;
     }
@@ -837,89 +894,33 @@ app.post("/v1/chat/completions", async (req, res) => {
   }
 });
 
-/** Extract prompt text from Anthropic-format request body */
-const extractPromptTextAnthropic = (body: Record<string, unknown>): { captured: string; promptTokens: number } => {
-  const parts: string[] = [];
-  if (typeof body.system === "string" && body.system.trim()) {
-    parts.push(body.system.trim());
-  }
-  if (Array.isArray(body.messages)) {
-    for (const m of body.messages) {
-      if (!m || typeof m !== "object") continue;
-      const msg = m as Record<string, unknown>;
-      if (msg.role !== "user") continue;
-      if (typeof msg.content === "string") {
-        parts.push(msg.content);
-      } else if (Array.isArray(msg.content)) {
-        for (const part of msg.content) {
-          if (typeof part === "string") parts.push(part);
-          else if (part && typeof part === "object") {
-            const p = part as Record<string, unknown>;
-            if (typeof p.text === "string") parts.push(p.text);
-          }
-        }
-      }
-    }
-  }
-  const captured = parts.join("\n").trim();
-  return { captured, promptTokens: Math.max(1, Math.ceil(Math.max(1, captured.length) / 4)) };
-};
-
-/** Build forward headers for Anthropic upstream (uses x-api-key instead of Authorization) */
-const buildAnthropicForwardHeaders = (req: express.Request, apiKey: string): Record<string, string> => {
-  const headers: Record<string, string> = {};
-  for (const [key, value] of Object.entries(req.headers)) {
-    if (HOP_BY_HOP_HEADERS.has(key.toLowerCase())) continue;
-    if (typeof value === "string") {
-      headers[key] = value;
-    } else if (Array.isArray(value)) {
-      headers[key] = value.join(", ");
-    }
-  }
-  if (apiKey.trim()) {
-    headers["x-api-key"] = apiKey.trim();
-    delete headers["authorization"];
-  }
-  if (!headers["content-type"]) headers["content-type"] = "application/json";
-  if (!headers["anthropic-version"]) headers["anthropic-version"] = "2023-06-01";
-  return headers;
-};
-
-/** Extract text content from Anthropic SSE stream */
-const extractAnthropicSseContent = (raw: string): string => {
-  let content = "";
-  for (const line of raw.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed.startsWith("data:")) continue;
-    const data = trimmed.slice(5).trim();
-    if (!data) continue;
-    try {
-      const parsed = JSON.parse(data) as { type?: string; delta?: { type?: string; text?: string } };
-      if (parsed.type === "content_block_delta" && parsed.delta?.type === "text_delta" && typeof parsed.delta.text === "string") {
-        content += parsed.delta.text;
-      }
-    } catch { continue; }
-  }
-  return content.trim();
-};
 
 /** Handle /v1/messages streaming response from upstream.
- * Auto-detects format: translates OpenAI SSE → Anthropic SSE if needed, or passes Anthropic SSE through. */
+ * Auto-detects format: translates OpenAI SSE → Anthropic SSE if needed, or passes Anthropic SSE through.
+ * Uses inline extractors — content is never truncated. */
 const handleMessagesStream = async (
   reader: ReadableStreamDefaultReader<Uint8Array>,
   res: express.Response,
   msgId: string,
   model: string,
-): Promise<{ capturedSse: string; content: string; reasoning: string; format: "oai" | "anthropic" | "unknown" }> => {
+  promptTokens: number,
+): Promise<{ capturedSse: string; content: string; reasoning: string; toolCalls: StoredToolCall[]; format: "oai" | "anthropic" | "unknown" }> => {
   const decoder = new TextDecoder();
   let lineBuffer = "";
+  const RAW_SSE_LIMIT = 32_000;
   let capturedSse = "";
-  const captureLimit = 24000;
   let format: "oai" | "anthropic" | "unknown" = "unknown";
-  let oaiContentBlockOpen = false;
+
+  // OAI → Anthropic translation state
+  let oaiTextBlockOpen = false;
   let oaiDone = false;
-  let content = "";
-  let reasoning = "";
+  let oaiRawContent = "";
+  let oaiReasoning = "";
+  const oaiToolBlocks: Array<{ id: string; name: string; contentBlockIdx: number; started: boolean }> = [];
+  let nextBlockIdx = 0;
+
+  // Anthropic passthrough extraction
+  const anthropicExtractor = createAnthropicSseExtractor();
 
   const writeEvent = (event: string, data: unknown) => {
     res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
@@ -927,61 +928,111 @@ const handleMessagesStream = async (
 
   const handleOaiChunk = (data: string) => {
     if (data === "[DONE]") return;
-    let parsed: {
-      choices?: Array<{ delta?: Record<string, unknown>; finish_reason?: string | null }>;
-      usage?: { completion_tokens?: number };
-    };
+    let parsed: { choices?: Array<{ delta?: Record<string, unknown>; finish_reason?: string | null }>; usage?: { completion_tokens?: number } };
     try { parsed = JSON.parse(data); } catch { return; }
     const choice = parsed.choices?.[0];
     if (!choice) return;
     const delta = choice.delta ?? {};
+
+    // Reasoning (DeepSeek / Qwen style)
     if (typeof delta.reasoning_content === "string" && delta.reasoning_content) {
-      reasoning += delta.reasoning_content;
+      oaiReasoning += delta.reasoning_content;
     }
-    if (typeof delta.content === "string") {
-      const stripped = delta.content.replace(/<\/?think>/gi, "");
+
+    // Text content
+    if (typeof delta.content === "string" && delta.content) {
+      // Keep raw content for <think> post-processing
+      oaiRawContent += delta.content;
+      // Strip <think> tags for the text block sent to the client
+      const stripped = delta.content.replace(/<think>[\s\S]*?<\/think>/gi, "").replace(/<\/?think>/gi, "");
       if (stripped) {
-        if (!oaiContentBlockOpen) {
-          oaiContentBlockOpen = true;
-          writeEvent("content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } });
+        if (!oaiTextBlockOpen) {
+          oaiTextBlockOpen = true;
+          nextBlockIdx = 0;
+          writeEvent("content_block_start", { type: "content_block_start", index: nextBlockIdx, content_block: { type: "text", text: "" } });
           writeEvent("ping", { type: "ping" });
+          nextBlockIdx++;
         }
         writeEvent("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: stripped } });
-        content += stripped;
       }
     }
+
+    // Tool calls → Anthropic tool_use blocks
+    if (Array.isArray(delta.tool_calls)) {
+      for (const tc of delta.tool_calls as Array<{ index?: number; id?: string; function?: { name?: string; arguments?: string } }>) {
+        const idx = tc.index ?? 0;
+        if (!oaiToolBlocks[idx]) {
+          // First delta for this tool: open text block first if not yet done
+          if (!oaiTextBlockOpen && !oaiToolBlocks.some(Boolean)) {
+            // Close text block (even empty) to keep block order clean
+            oaiTextBlockOpen = true;
+            nextBlockIdx = 0;
+            writeEvent("content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } });
+            nextBlockIdx = 1;
+          } else if (oaiTextBlockOpen) {
+            nextBlockIdx = 1;
+          }
+          oaiToolBlocks[idx] = { id: tc.id ?? "", name: tc.function?.name ?? "", contentBlockIdx: nextBlockIdx, started: false };
+          nextBlockIdx++;
+        }
+        const block = oaiToolBlocks[idx];
+        if (tc.id) block.id = tc.id;
+        if (tc.function?.name) block.name += tc.function.name;
+        if (!block.started && block.name && block.id) {
+          block.started = true;
+          writeEvent("content_block_start", { type: "content_block_start", index: block.contentBlockIdx, content_block: { type: "tool_use", id: block.id, name: block.name, input: {} } });
+          writeEvent("ping", { type: "ping" });
+        }
+        if (tc.function?.arguments && block.started) {
+          writeEvent("content_block_delta", { type: "content_block_delta", index: block.contentBlockIdx, delta: { type: "input_json_delta", partial_json: tc.function.arguments } });
+        }
+      }
+    }
+
     if (choice.finish_reason && !oaiDone) {
       oaiDone = true;
-      if (!oaiContentBlockOpen) {
-        oaiContentBlockOpen = true;
-        writeEvent("content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } });
+      // Close any open text block
+      if (oaiTextBlockOpen) {
+        writeEvent("content_block_stop", { type: "content_block_stop", index: 0 });
       }
-      writeEvent("content_block_stop", { type: "content_block_stop", index: 0 });
-      const stopReason = choice.finish_reason === "length" ? "max_tokens" : choice.finish_reason === "tool_calls" ? "tool_use" : "end_turn";
-      const outputTokens = parsed.usage?.completion_tokens ?? Math.max(1, Math.ceil(content.length / 4));
+      // Close all open tool blocks
+      for (const block of oaiToolBlocks) {
+        if (block?.started) writeEvent("content_block_stop", { type: "content_block_stop", index: block.contentBlockIdx });
+      }
+      const stopReason = choice.finish_reason === "length" ? "max_tokens"
+        : choice.finish_reason === "tool_calls" ? "tool_use" : "end_turn";
+      const outputTokens = parsed.usage?.completion_tokens ?? Math.max(1, Math.ceil((oaiRawContent.replace(/<think>[\s\S]*?<\/think>/gi, "")).length / 4));
       writeEvent("message_delta", { type: "message_delta", delta: { stop_reason: stopReason, stop_sequence: null }, usage: { output_tokens: outputTokens } });
       writeEvent("message_stop", { type: "message_stop" });
     }
   };
 
   const processLine = (line: string) => {
-    if (capturedSse.length < captureLimit) capturedSse += line + "\n";
-    if (format === "anthropic") { res.write(line + "\n"); return; }
+    if (capturedSse.length < RAW_SSE_LIMIT) capturedSse += line + "\n";
+
+    if (format === "anthropic") {
+      res.write(line + "\n");
+      anthropicExtractor.feed(line + "\n");
+      return;
+    }
+
     const trimmed = line.trim();
     if (!trimmed.startsWith("data:")) return;
     const data = trimmed.slice(5).trim();
     if (!data) return;
+
     if (format === "unknown") {
       if (data === "[DONE]") { format = "oai"; return; }
       try {
         const peek = JSON.parse(data) as Record<string, unknown>;
         if (peek.object === "chat.completion.chunk" || Array.isArray(peek.choices)) {
           format = "oai";
-          writeEvent("message_start", { type: "message_start", message: { id: msgId, type: "message", role: "assistant", content: [], model, stop_reason: null, stop_sequence: null, usage: { input_tokens: 0, output_tokens: 1 } } });
+          writeEvent("message_start", { type: "message_start", message: { id: msgId, type: "message", role: "assistant", content: [], model, stop_reason: null, stop_sequence: null, usage: { input_tokens: promptTokens, output_tokens: 0 } } });
           handleOaiChunk(data);
         } else {
           format = "anthropic";
           res.write(line + "\n");
+          anthropicExtractor.feed(line + "\n");
         }
       } catch { /* skip unparseable first line */ }
       return;
@@ -1000,17 +1051,44 @@ const handleMessagesStream = async (
   }
   if (lineBuffer) processLine(lineBuffer);
 
-  if ((format as "oai" | "anthropic" | "unknown") === "oai" && !oaiDone) {
-    if (!oaiContentBlockOpen) {
-      oaiContentBlockOpen = true;
-      writeEvent("content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } });
+  // Flush any unterminated OAI stream
+  if ((format as string) === "oai" && !oaiDone) {
+    if (oaiTextBlockOpen) writeEvent("content_block_stop", { type: "content_block_stop", index: 0 });
+    for (const block of oaiToolBlocks) {
+      if (block?.started) writeEvent("content_block_stop", { type: "content_block_stop", index: block.contentBlockIdx });
     }
-    writeEvent("content_block_stop", { type: "content_block_stop", index: 0 });
-    writeEvent("message_delta", { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: Math.max(1, Math.ceil(content.length / 4)) } });
+    writeEvent("message_delta", { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: Math.max(1, Math.ceil(oaiRawContent.length / 4)) } });
     writeEvent("message_stop", { type: "message_stop" });
   }
 
-  return { capturedSse, content, reasoning, format };
+  // Compute final extracted values
+  let content: string;
+  let reasoning: string;
+  let toolCalls: StoredToolCall[];
+
+  if ((format as string) === "anthropic") {
+    const r = anthropicExtractor.finish();
+    content = r.content; reasoning = r.reasoning; toolCalls = r.toolCalls;
+  } else {
+    // OAI: post-process rawContent for <think> tags
+    let thinkReasoning = "";
+    const thinkRe = /<think>([\s\S]*?)<\/think>/gi;
+    let m: RegExpExecArray | null;
+    while ((m = thinkRe.exec(oaiRawContent)) !== null) thinkReasoning += (thinkReasoning ? "\n\n" : "") + m[1];
+    content = oaiRawContent.replace(/<think>[\s\S]*?<\/think>/gi, "").replace(/<\/?think>/gi, "").trim();
+    reasoning = [oaiReasoning, thinkReasoning].filter(Boolean).join("\n\n").trim();
+    toolCalls = oaiToolBlocks.filter(Boolean).map((b) => ({ id: b.id, name: b.name, arguments: "" }));
+    // Note: tool args were streamed to client but not accumulated separately here (they're in the SSE)
+    // Re-extract from capturedSse for completeness
+    const reExtracted = createOaiSseExtractor();
+    reExtracted.feed(capturedSse);
+    const re = reExtracted.finish();
+    if (re.toolCalls.length > 0) toolCalls = re.toolCalls;
+    if (!content && re.content) content = re.content;
+    if (!reasoning && re.reasoning) reasoning = re.reasoning;
+  }
+
+  return { capturedSse, content, reasoning, toolCalls, format };
 };
 
 app.post("/v1/messages", async (req, res) => {
@@ -1020,7 +1098,7 @@ app.post("/v1/messages", async (req, res) => {
   const rawModel = typeof body.model === "string" ? body.model : "unknown";
   const model = config.modelOverride.trim() || rawModel;
   const stream = body.stream === true;
-  const { captured, promptTokens } = extractPromptTextAnthropic(body);
+  const { captured, promptTokens } = extractPromptText(body, "anthropic");
 
   const recordBody = config.modelOverride.trim() ? { ...body, model } : body;
   const record = addExchange({ mode: config.mode, model, prompt: captured, promptTokens, requestBody: recordBody });
@@ -1076,10 +1154,10 @@ app.post("/v1/messages", async (req, res) => {
   const forwardBody: Record<string, unknown> = { ...body };
   if (config.modelOverride.trim()) forwardBody.model = config.modelOverride.trim();
 
-  const forwardHeaders = buildAnthropicForwardHeaders(req, config.apiKey);
+  const forwardHeaders = buildForwardHeaders(req, config.apiKey, "x-api-key");
 
   try {
-    const upstreamResponse = await fetch(upstreamUrl, { method: "POST", headers: forwardHeaders, body: JSON.stringify(forwardBody) });
+    const upstreamResponse = await fetch(upstreamUrl, { method: "POST", headers: forwardHeaders, body: JSON.stringify(forwardBody), signal: AbortSignal.timeout(120_000) });
 
     if (stream) {
       res.status(upstreamResponse.status);
@@ -1090,14 +1168,15 @@ app.post("/v1/messages", async (req, res) => {
       let capturedSse = "";
       let extractedContent = "";
       let extractedReasoning = "";
-
+      let extractedToolCalls: StoredToolCall[] = [];
       if (upstreamResponse.body) {
         const reader = upstreamResponse.body.getReader();
         const msgId = `msg_${Date.now()}`;
-        const result = await handleMessagesStream(reader, res, msgId, model);
+        const result = await handleMessagesStream(reader, res, msgId, model, promptTokens);
         capturedSse = result.capturedSse;
-        extractedContent = result.format === "oai" ? result.content : extractAnthropicSseContent(capturedSse);
+        extractedContent = result.content;
         extractedReasoning = result.reasoning;
+        extractedToolCalls = result.toolCalls;
       }
       res.end();
 
@@ -1108,6 +1187,7 @@ app.post("/v1/messages", async (req, res) => {
           content: extractedContent,
           output_text: extractedContent,
           ...(extractedReasoning ? { reasoning: extractedReasoning } : {}),
+          ...(extractedToolCalls.length > 0 ? { toolCalls: extractedToolCalls } : {}),
           rawSse: capturedSse,
         },
         upstreamUrl, upstreamStatusCode: upstreamResponse.status, durationMs: Date.now() - startedAt,
@@ -1179,9 +1259,8 @@ app.all("/v1/*", async (req, res) => {
     const upstreamResponse = await fetch(upstreamUrl, {
       method: req.method,
       headers: forwardHeaders,
-      ...(hasBody && req.body
-        ? { body: JSON.stringify(req.body) }
-        : {}),
+      ...(hasBody && req.body ? { body: JSON.stringify(req.body) } : {}),
+      signal: AbortSignal.timeout(120_000),
     });
 
     res.status(upstreamResponse.status);
@@ -1224,19 +1303,10 @@ app.all("/v1/*", async (req, res) => {
   }
 });
 
-app.use(
-  "/trpc",
-  createExpressMiddleware({
-    router: appRouter,
-    createContext: () => ({}),
-  })
-);
-
 // --- SPA fallback: serve index.html for any unmatched GET request (production only) ---
 if (serveStatic) {
-  const indexPath = resolve(webDistPath, "index.html");
   app.get("*", (_req, res) => {
-    if (existsSync(indexPath)) {
+    if (indexExists) {
       res.sendFile(indexPath);
     } else {
       res.status(404).json({ error: "Not found" });

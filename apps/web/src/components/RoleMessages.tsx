@@ -15,7 +15,7 @@ const roleConfig: Record<string, { icon: LucideIcon; label: string; color: strin
 
 const defaultRoleConfig = { icon: Hash, label: "Unknown", color: "text-base-content/50", bgColor: "bg-base-content/5", borderColor: "border-base-content/10" };
 
-const TRUNCATE_LEN = 200;
+const TRUNCATE_LEN = 1000;
 
 export const RoleMessages = ({ messages }: { messages: ChatMessage[] }) => {
   const [expandedMsgs, setExpandedMsgs] = useState<Set<number>>(new Set());

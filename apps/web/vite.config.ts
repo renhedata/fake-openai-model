@@ -14,7 +14,6 @@ export default defineConfig(({ mode }) => {
         "/proxy": backendTarget,
         "/events": backendTarget,
         "/exchanges": backendTarget,
-        "/trpc": backendTarget,
         "/health": backendTarget
       }
     },

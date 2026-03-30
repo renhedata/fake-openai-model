@@ -5,22 +5,24 @@ FROM base AS pruner
 WORKDIR /app
 RUN bun add -g turbo
 COPY . .
-RUN turbo prune @fake/server --docker
-RUN turbo prune @fake/web --docker
+RUN turbo prune @fake/server @fake/web --docker
 
-# --- Build all ---
+# --- Build stage ---
 FROM base AS builder
 WORKDIR /app
 COPY --from=pruner /app/out/json/ .
 COPY --from=pruner /app/out/bun.lock /app/bun.lock
 RUN bun install
 COPY --from=pruner /app/out/full/ .
-RUN bun run build --filter=@fake/web
-RUN bun run build --filter=@fake/server
+RUN bun run build --filter=@fake/web && bun run build --filter=@fake/server
 
-# --- Final Runner ---
+# --- Runner stage (production only) ---
 FROM base AS runner
 WORKDIR /app
-COPY --from=builder /app .
-EXPOSE 3000
-CMD ["bun", "run", "--cwd", "apps/server", "start"]
+COPY --from=pruner /app/out/json/ .
+COPY --from=pruner /app/out/bun.lock /app/bun.lock
+RUN bun install
+COPY --from=builder /app/apps/server/dist ./apps/server/dist
+COPY --from=builder /app/apps/web/dist ./apps/web/dist
+EXPOSE 3001
+CMD ["node", "apps/server/dist/index.js"]

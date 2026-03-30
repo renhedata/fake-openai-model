@@ -67,41 +67,77 @@ const extractFromOaiRawSse = (rawSse: string): { content: string; reasoning: str
   return { content: content.trim(), reasoning: reasoning.trim() };
 };
 
+/** Format a tool call for display. */
+const formatToolCall = (name: string, args: string): string => {
+  let pretty = args;
+  try { pretty = JSON.stringify(JSON.parse(args), null, 2); } catch { /* keep as-is */ }
+  return `[Tool Call] **${name}**\n\`\`\`json\n${pretty}\n\`\`\``;
+};
+
 export const getResponseText = (v: unknown): string => {
   if (!v || typeof v !== "object") return "";
-  const r = v as {
-    choices?: Array<{ message?: { content?: string; reasoning_content?: string; tool_calls?: Array<{ function?: { name?: string; arguments?: string } }> } }>;
-    assistant?: string;
-    content?: string | unknown[];
-    output_text?: string;
-  };
-  if (typeof r.assistant === "string" && r.assistant.trim()) return r.assistant;
-  if (typeof r.output_text === "string") return r.output_text;
-  if (typeof r.content === "string") return r.content;
-  if (Array.isArray(r.content)) {
-    const text = (r.content as Array<Record<string, unknown>>)
-      .filter((b) => b.type === "text" && typeof b.text === "string")
-      .map((b) => b.text as string)
-      .join("\n");
-    if (text.trim()) return text;
+  const r = v as Record<string, unknown>;
+
+  // Streaming stored format
+  if (typeof r.assistant === "string" && r.assistant.trim()) {
+    let result = r.assistant;
+    // Append stored tool calls (from streaming OAI or Anthropic)
+    if (Array.isArray(r.toolCalls) && r.toolCalls.length > 0) {
+      const tcText = (r.toolCalls as Array<{ name?: string; arguments?: string }>)
+        .map((tc) => formatToolCall(tc.name ?? "?", tc.arguments ?? ""))
+        .join("\n\n");
+      result = result ? `${result}\n\n${tcText}` : tcText;
+    }
+    return result;
   }
-  const msg = r.choices?.[0]?.message;
+
+  // OpenAI Responses API
+  if (typeof r.output_text === "string" && r.output_text.trim()) return r.output_text;
+
+  // Anthropic / streaming stored plain content string
+  if (typeof r.content === "string" && r.content.trim()) return r.content;
+
+  // Anthropic content array
+  if (Array.isArray(r.content)) {
+    const parts: string[] = [];
+    for (const b of r.content as Array<Record<string, unknown>>) {
+      if (b.type === "text" && typeof b.text === "string" && b.text.trim()) {
+        parts.push(b.text);
+      } else if (b.type === "tool_use") {
+        const args = b.input !== undefined ? JSON.stringify(b.input, null, 2) : (typeof b.arguments === "string" ? b.arguments : "");
+        parts.push(formatToolCall(String(b.name ?? "?"), args));
+      }
+    }
+    if (parts.length > 0) return parts.join("\n\n");
+  }
+
+  // OpenAI chat.completion
+  const msg = (r.choices as Array<{ message?: Record<string, unknown> }> | undefined)?.[0]?.message;
   if (msg) {
     if (typeof msg.content === "string" && msg.content.trim()) return msg.content;
     if (Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
-      return msg.tool_calls
-        .map((tc) => {
-          const fn = tc.function;
-          if (!fn) return "[tool_call]";
-          return `[Tool Call] ${fn.name ?? "?"}(${fn.arguments ?? ""})`;
-        })
-        .join("\n");
+      return (msg.tool_calls as Array<{ function?: { name?: string; arguments?: string } }>)
+        .map((tc) => formatToolCall(tc.function?.name ?? "?", tc.function?.arguments ?? ""))
+        .join("\n\n");
     }
   }
-  // Fallback: parse OAI-format rawSse if content fields are empty
-  const rr = v as Record<string, unknown>;
-  if (typeof rr.rawSse === "string" && rr.rawSse) {
-    return extractFromOaiRawSse(rr.rawSse).content;
+
+  // OpenAI Responses API output array
+  if (Array.isArray(r.output)) {
+    for (const item of r.output as Array<Record<string, unknown>>) {
+      if (item.type === "message" && Array.isArray(item.content)) {
+        const text = (item.content as Array<Record<string, unknown>>)
+          .filter((c) => c.type === "output_text" && typeof c.text === "string")
+          .map((c) => c.text as string)
+          .join("\n");
+        if (text.trim()) return text;
+      }
+    }
+  }
+
+  // Fallback: parse OAI-format rawSse
+  if (typeof r.rawSse === "string" && r.rawSse) {
+    return extractFromOaiRawSse(r.rawSse).content;
   }
   return "";
 };
@@ -109,13 +145,21 @@ export const getResponseText = (v: unknown): string => {
 export const getReasoningText = (v: unknown): string => {
   if (!v || typeof v !== "object") return "";
   const r = v as Record<string, unknown>;
-  // Streaming mode: stored as r.reasoning
+  // Streaming stored reasoning
   if (typeof r.reasoning === "string" && r.reasoning.trim()) return r.reasoning;
-  // Non-streaming: stored in choices[0].message.reasoning_content
+  // OpenAI non-streaming: choices[0].message.reasoning_content
   const choices = r.choices as Array<Record<string, unknown>> | undefined;
   const msg = choices?.[0]?.message as Record<string, unknown> | undefined;
   if (msg && typeof msg.reasoning_content === "string" && msg.reasoning_content.trim()) {
     return msg.reasoning_content;
+  }
+  // Anthropic non-streaming: thinking blocks in content array
+  if (Array.isArray(r.content)) {
+    const thinking = (r.content as Array<Record<string, unknown>>)
+      .filter((b) => b.type === "thinking" && typeof b.thinking === "string")
+      .map((b) => b.thinking as string)
+      .join("\n\n");
+    if (thinking.trim()) return thinking;
   }
   // Fallback: parse OAI-format rawSse
   if (typeof r.rawSse === "string" && r.rawSse) {
@@ -158,30 +202,62 @@ export const buildResponseMarkdown = (v: unknown) => {
   return `\`\`\`json\n${safeStringify(v ?? {})}\n\`\`\``;
 };
 
+const extractContentParts = (content: unknown): string => {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return (content as Array<Record<string, unknown>>)
+    .map((part) => {
+      if (typeof part === "string") return part;
+      // Common text fields
+      if (typeof part.text === "string") return part.text;
+      if (typeof part.input_text === "string") return part.input_text;
+      // OAI image_url
+      if (part.type === "image_url") {
+        const iu = part.image_url as Record<string, unknown> | string | undefined;
+        const url = typeof iu === "string" ? iu : (iu as Record<string, unknown> | undefined)?.url;
+        return `[Image: ${typeof url === "string" ? url.slice(0, 80) : "..."}]`;
+      }
+      // Anthropic image (base64 or URL)
+      if (part.type === "image") {
+        const src = part.source as Record<string, unknown> | undefined;
+        if (src?.type === "url" && typeof src.url === "string") return `[Image: ${src.url.slice(0, 80)}]`;
+        if (src?.type === "base64") return `[Image: base64 ${src.media_type ?? ""}]`;
+        return "[Image]";
+      }
+      // Anthropic tool_use (assistant)
+      if (part.type === "tool_use") {
+        const args = part.input !== undefined ? JSON.stringify(part.input) : "";
+        return `[Tool Call] ${String(part.name ?? "?")}(${args})`;
+      }
+      // Anthropic tool_result (user)
+      if (part.type === "tool_result") {
+        const resultContent = extractContentParts(part.content);
+        return `[Tool Result: ${String(part.tool_use_id ?? "")}] ${resultContent}`;
+      }
+      // Anthropic thinking block
+      if (part.type === "thinking" && typeof part.thinking === "string") {
+        return `[Thinking] ${part.thinking.slice(0, 200)}${part.thinking.length > 200 ? "…" : ""}`;
+      }
+      // Anthropic document
+      if (part.type === "document") {
+        const src = part.source as Record<string, unknown> | undefined;
+        const title = typeof part.title === "string" ? part.title : (typeof src?.url === "string" ? src.url.slice(0, 60) : "document");
+        return `[Document: ${title}]`;
+      }
+      return "";
+    })
+    .filter(Boolean)
+    .join("");
+};
+
 export const extractMessages = (requestBody: unknown): ChatMessage[] => {
   if (!requestBody || typeof requestBody !== "object") return [];
   const body = requestBody as { messages?: Array<Record<string, unknown>> };
   if (!Array.isArray(body.messages)) return [];
   return body.messages.map((m) => {
     const role = typeof m.role === "string" ? m.role : "unknown";
-    let content = "";
-    if (typeof m.content === "string") {
-      content = m.content;
-    } else if (Array.isArray(m.content)) {
-      content = (m.content as Array<Record<string, unknown>>)
-        .map((part) => {
-          if (typeof part === "string") return part;
-          if (typeof part.text === "string") return part.text;
-          if (typeof part.input_text === "string") return part.input_text;
-          if (part.type === "image_url" && part.image_url) {
-            const url = typeof part.image_url === "string" ? part.image_url : (part.image_url as Record<string, unknown>).url;
-            return `[Image: ${typeof url === "string" ? url.slice(0, 80) : "..."}]`;
-          }
-          return "";
-        })
-        .filter(Boolean)
-        .join("");
-    }
+    const content = extractContentParts(m.content);
+    // OAI-style tool_calls on the message object
     const toolCalls = Array.isArray(m.tool_calls)
       ? (m.tool_calls as Array<Record<string, unknown>>).map((tc) => {
           const fn = tc.function as Record<string, unknown> | undefined;
