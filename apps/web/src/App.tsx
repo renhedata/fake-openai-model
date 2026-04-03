@@ -99,6 +99,9 @@ export const App = () => {
 
   useEffect(() => { void loadInitialPage(); }, [loadInitialPage]);
 
+  const loadInitialPageRef = useRef(loadInitialPage);
+  useEffect(() => { loadInitialPageRef.current = loadInitialPage; }, [loadInitialPage]);
+
   useEffect(() => {
     const t = setTimeout(() => setSearchQuery(searchInput), 300);
     return () => clearTimeout(t);
@@ -131,6 +134,10 @@ export const App = () => {
             const nc = normalizeConfig(meta.config);
             setDashboardMeta({ stats: meta.stats, config: nc, models: meta.models });
             if (!dirtyRef.current) { setConfigForm(nc); lastSavedSignatureRef.current = JSON.stringify(nc); }
+          }
+          if (data.type === "update" && !data.latest && meta) {
+            // Server emitted null latest (deletion or config change) — refresh list
+            void loadInitialPageRef.current();
           }
           if (data.latest) {
             const latest = data.latest;
@@ -296,7 +303,10 @@ export const App = () => {
     try {
       const r = await fetch("/exchanges", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ ids: Array.from(selectedIds) }) });
       if (!r.ok) throw new Error("删除失败");
+      const deletedIds = selectedIds;
       setSelectedIds(new Set());
+      setPaginatedItems((prev) => prev.filter((i) => !deletedIds.has(i.id)));
+      setTotalCount((prev) => Math.max(0, prev - deletedIds.size));
     } catch (e) { console.error(e); }
     finally { setDeleting(false); }
   }, [selectedIds]);
