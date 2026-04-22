@@ -1,8 +1,5 @@
 import { Router } from "express";
 import {
-  createFakeStreamText,
-} from "../router.js";
-import {
   addExchange,
   completeExchange,
   getProxyConfig,
@@ -240,43 +237,6 @@ messagesRouter.post("/v1/messages", async (req, res) => {
     apiKeyName: keyValidation.ok ? keyValidation.apiKeyName : undefined,
     agentType,
   });
-
-  if (config.mode === "capture_only") {
-    const content = createFakeStreamText(captured);
-    const msgId = `msg_${Date.now()}`;
-    const inputTokens = promptTokens;
-    const outputTokens = Math.max(1, Math.ceil(content.length / 4));
-
-    if (stream) {
-      const startedAt = Date.now();
-      res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
-      res.setHeader("Cache-Control", "no-cache");
-      res.setHeader("Connection", "keep-alive");
-
-      const writeEvent = (event: string, data: unknown) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-
-      writeEvent("message_start", { type: "message_start", message: { id: msgId, type: "message", role: "assistant", content: [], model, stop_reason: null, stop_sequence: null, usage: { input_tokens: inputTokens, output_tokens: 0 } } });
-      writeEvent("content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } });
-      writeEvent("ping", { type: "ping" });
-
-      for (const part of (content.match(/.{1,12}/g) ?? [content])) {
-        writeEvent("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: part } });
-      }
-
-      writeEvent("content_block_stop", { type: "content_block_stop", index: 0 });
-      writeEvent("message_delta", { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: outputTokens } });
-      writeEvent("message_stop", { type: "message_stop" });
-      res.end();
-
-      completeExchange(record.id, { responseStatus: "success", responseBody: { stream: true, content, output_text: content }, durationMs: Date.now() - startedAt });
-      return;
-    }
-
-    const fakeResponse = { id: msgId, type: "message", role: "assistant", content: [{ type: "text", text: content }], model, stop_reason: "end_turn", stop_sequence: null, usage: { input_tokens: inputTokens, output_tokens: outputTokens } };
-    completeExchange(record.id, { responseStatus: "success", responseBody: fakeResponse, durationMs: 0 });
-    res.json(fakeResponse);
-    return;
-  }
 
   // --- Validate caller key ---
   if (!keyValidation.ok) {

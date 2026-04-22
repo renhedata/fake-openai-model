@@ -1,4 +1,4 @@
-export type ProxyMode = "capture_only" | "forward";
+export type ProxyMode = "forward";
 export type ApiType = "chat_completions" | "responses";
 
 export type ProxyConfig = {
@@ -63,7 +63,6 @@ export type ExchangeStats = {
   totalRequests: number;
   totalPromptTokens: number;
   totalForwarded: number;
-  totalCaptureOnly: number;
 };
 
 export type ModelRecord = { id: string; object: string; created: number; owned_by: string; providerId?: string };

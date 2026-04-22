@@ -15,7 +15,7 @@ export const normalizeConfig = (v?: Partial<ProxyConfig>): ProxyConfig => {
   const rawPath = v?.path ?? "/v1/chat/completions";
   const apiType = v?.apiType ?? pathToApiType(rawPath);
   return {
-    mode: v?.mode ?? "capture_only",
+    mode: v?.mode ?? "forward",
     apiType,
     baseUrl: v?.baseUrl ?? "https://api.openai.com/v1",
     path: v?.path ?? apiTypeToPath(apiType),
@@ -27,7 +27,7 @@ export const normalizeConfig = (v?: Partial<ProxyConfig>): ProxyConfig => {
 export const defaultConfig: ProxyConfig = normalizeConfig();
 
 export const emptyMeta: DashboardMeta = {
-  stats: { totalRequests: 0, totalPromptTokens: 0, totalForwarded: 0, totalCaptureOnly: 0 },
+  stats: { totalRequests: 0, totalPromptTokens: 0, totalForwarded: 0 },
   config: defaultConfig,
   providers: [],
   apiKeys: [],

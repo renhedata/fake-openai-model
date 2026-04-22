@@ -1,8 +1,4 @@
 import { Router } from "express";
-import {
-  createFakeCompletion,
-  createFakeStreamText,
-} from "../router.js";
 import { openaiToClaudeRequest } from "../translator/openai-to-claude.js";
 import {
   claudeToOpenAIChunk,
@@ -62,76 +58,6 @@ chatCompletionsRouter.post("/v1/chat/completions", async (req, res) => {
     apiKeyName: keyValidation.ok ? keyValidation.apiKeyName : undefined,
     agentType,
   });
-
-  // --- Capture Only mode: generate fake response ---
-  if (config.mode === "capture_only") {
-    if (stream) {
-      const content = createFakeStreamText(captured);
-      const startedAt = Date.now();
-      const id = `chatcmpl_${Date.now()}`;
-      const created = Math.floor(Date.now() / 1000);
-      const chunks = content.match(/.{1,12}/g) ?? [content];
-
-      res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
-      res.setHeader("Cache-Control", "no-cache");
-      res.setHeader("Connection", "keep-alive");
-
-      const write = (payload: unknown) => {
-        res.write(`data: ${JSON.stringify(payload)}\n\n`);
-      };
-
-      write({
-        id,
-        object: "chat.completion.chunk",
-        created,
-        model,
-        choices: [
-          { index: 0, delta: { role: "assistant" }, finish_reason: null },
-        ],
-      });
-
-      for (const part of chunks) {
-        write({
-          id,
-          object: "chat.completion.chunk",
-          created,
-          model,
-          choices: [
-            { index: 0, delta: { content: part }, finish_reason: null },
-          ],
-        });
-      }
-
-      write({
-        id,
-        object: "chat.completion.chunk",
-        created,
-        model,
-        choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-      });
-      res.write("data: [DONE]\n\n");
-      res.end();
-
-      completeExchange(record.id, {
-        responseStatus: "success",
-        responseBody: {
-          stream: true,
-          content,
-        },
-        durationMs: Date.now() - startedAt,
-      });
-      return;
-    }
-
-    const completion = createFakeCompletion({ model }, promptTokens);
-    completeExchange(record.id, {
-      responseStatus: "success",
-      responseBody: completion,
-      durationMs: 0,
-    });
-    res.json(completion);
-    return;
-  }
 
   // --- Validate caller key (if api_keys table has entries) ---
   if (!keyValidation.ok) {

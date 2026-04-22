@@ -2,7 +2,7 @@ import { mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 
-export type ProxyMode = "capture_only" | "forward";
+export type ProxyMode = "forward";
 export type ApiType = "chat_completions" | "responses";
 
 export type ProxyConfig = {
@@ -75,7 +75,6 @@ export type ExchangeStats = {
   totalRequests: number;
   totalPromptTokens: number;
   totalForwarded: number;
-  totalCaptureOnly: number;
 };
 
 /** Lightweight version without the heavy items array — used for SSE pushes */
@@ -105,7 +104,7 @@ const envApiType: ApiType = process.env.UPSTREAM_API_TYPE === "responses" ? "res
 const envPath = process.env.UPSTREAM_PATH ?? pathFromApiType(envApiType);
 
 const proxyConfig: ProxyConfig = {
-  mode: process.env.PROXY_MODE === "forward" ? "forward" : "capture_only",
+  mode: "forward",
   apiType: apiTypeFromPath(envPath),
   baseUrl: process.env.UPSTREAM_BASE_URL ?? "https://api.openai.com",
   path: envPath,
@@ -391,7 +390,7 @@ const parseJson = (value: string | null | undefined): unknown => {
 
 const mapExchangeRow = (row: Record<string, unknown>): ExchangeRecord => ({
   id: String(row.id),
-  mode: row.mode === "forward" ? "forward" : "capture_only",
+  mode: "forward",
   model: String(row.model),
   prompt: String(row.prompt),
   promptTokens: Number(row.prompt_tokens) || 0,
@@ -412,7 +411,7 @@ const mapExchangeRow = (row: Record<string, unknown>): ExchangeRecord => ({
 });
 
 const mapProxyConfigRow = (row: Record<string, unknown>): ProxyConfig => ({
-  mode: row.mode === "forward" ? "forward" : "capture_only",
+  mode: "forward",
   apiType: row.api_type === "responses" ? "responses" : "chat_completions",
   baseUrl: String(row.base_url ?? ""),
   path: String(row.path ?? pathFromApiType(row.api_type === "responses" ? "responses" : "chat_completions")),
@@ -651,8 +650,7 @@ export const getExchangeStats = (): ExchangeStats => {
       `SELECT
         COUNT(*) AS total_requests,
         COALESCE(SUM(prompt_tokens), 0) AS total_prompt_tokens,
-        COALESCE(SUM(CASE WHEN mode = 'forward' THEN 1 ELSE 0 END), 0) AS total_forwarded,
-        COALESCE(SUM(CASE WHEN mode = 'capture_only' THEN 1 ELSE 0 END), 0) AS total_capture_only
+        COALESCE(SUM(CASE WHEN mode = 'forward' THEN 1 ELSE 0 END), 0) AS total_forwarded
       FROM exchanges`
     )
     .get() as Record<string, unknown>;
@@ -660,8 +658,7 @@ export const getExchangeStats = (): ExchangeStats => {
   return {
     totalRequests: Number(row.total_requests) || 0,
     totalPromptTokens: Number(row.total_prompt_tokens) || 0,
-    totalForwarded: Number(row.total_forwarded) || 0,
-    totalCaptureOnly: Number(row.total_capture_only) || 0
+    totalForwarded: Number(row.total_forwarded) || 0
   };
 };
 

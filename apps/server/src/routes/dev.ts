@@ -44,7 +44,7 @@ if (process.env.NODE_ENV !== "production") {
       const durationMs = Math.floor(Math.random() * 4000) + 200;
       const response = responses[Math.floor(Math.random() * responses.length)];
       records.push({
-        mode: Math.random() > 0.5 ? "capture_only" : "forward",
+        mode: "forward",
         model,
         prompt,
         promptTokens,
