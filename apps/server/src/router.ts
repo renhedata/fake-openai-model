@@ -9,6 +9,25 @@ export const proxyConfigSchema = z.object({
   modelOverride: z.string()
 });
 
+export const providerSchema = z.object({
+  id: z.string().min(1).regex(/^[a-zA-Z0-9_-]+$/).optional(),
+  name: z.string().min(1),
+  providerType: z.string().default("custom"),
+  baseUrl: z.string().min(1),
+  apiKey: z.string(),
+  path: z.string().default("/v1/chat/completions"),
+  apiType: z.enum(["chat_completions", "responses"]).default("chat_completions"),
+  format: z.enum(["openai", "claude", "gemini", "ollama"]).default("openai"),
+  authStyle: z.enum(["bearer", "x-api-key"]).default("bearer"),
+  enabled: z.boolean().default(true),
+  models: z.array(z.string()).default([])
+});
+
+export const apiKeyCreateSchema = z.object({
+  name: z.string().min(1),
+  allowedModels: z.array(z.string()).nullable().optional()
+});
+
 export const upstreamModelSchema = z
   .object({
     id: z.string().min(1),
@@ -24,6 +43,19 @@ export const upstreamModelsResponseSchema = z
     data: z.array(upstreamModelSchema)
   })
   .passthrough();
+
+export const generateApiKey = () => {
+  const prefix = "fm_";
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  let result = prefix;
+  for (let i = 0; i < 24; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return result;
+};
+
+export const generateProviderId = (name: string) =>
+  name.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32) || "provider";
 
 const replyPool = [
   "这是一个假的模型响应。",

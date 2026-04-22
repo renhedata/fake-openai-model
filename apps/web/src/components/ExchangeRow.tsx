@@ -52,7 +52,7 @@ export const ExchangeRow = memo(function ExchangeRow({
 
         <button
           type="button"
-          className="flex flex-1 items-center gap-2 text-left transition-colors hover:bg-base-content/[0.02] min-w-0"
+          className="flex flex-1 items-center gap-2 text-left transition-colors hover:bg-base-content/[0.02] min-w-0 overflow-hidden"
           onClick={() => onToggle(item.id)}
         >
           {expanded
@@ -66,9 +66,17 @@ export const ExchangeRow = memo(function ExchangeRow({
             {item.responseStatus}
           </Badge>
 
-          <Badge variant={item.mode === "forward" ? "info" : "default"}>
-            {item.mode === "forward" ? "FWD" : "CAP"}
-          </Badge>
+          {item.apiKeyName && (
+            <Badge variant="default">
+              {item.apiKeyName}
+            </Badge>
+          )}
+
+          {item.agentType && (
+            <span className={`inline-flex items-center gap-1 rounded border px-1.5 py-px text-[10px] font-medium leading-tight transition-all duration-200 ${item.agentType === "openclaw" ? "bg-purple-500/15 text-purple-500 border-purple-500/20" : "bg-cyan-500/15 text-cyan-500 border-cyan-500/20"}`}>
+              {item.agentType === "openclaw" ? "OpenClaw" : "Hermes"}
+            </span>
+          )}
 
           {!compact && (
             <span className="mono shrink-0 text-[11px] text-base-content/50 w-24 truncate" title={item.model}>{item.model}</span>

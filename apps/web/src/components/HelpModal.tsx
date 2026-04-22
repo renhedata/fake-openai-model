@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ArrowUpDown, BookOpen, CheckCircle2, Loader2, Play, Shield, X, XCircle } from "lucide-react";
+import { ArrowUpDown, BookOpen, CheckCircle2, Loader2, Play, Server, X, XCircle } from "lucide-react";
 import { Badge } from "./Atoms";
 
 const TryItPanel = ({ endpoint, buildBody, extractText }: {
@@ -101,7 +101,7 @@ export const HelpModal = ({ open, onClose }: { open: boolean; onClose: () => voi
             <section>
               <h4 className="mb-2 text-xs font-bold uppercase tracking-wider text-base-content/40">这是什么</h4>
               <p className="text-base-content/70 leading-relaxed">
-                Fake Model Gateway 是一个本地 AI API 代理，支持 <span className="font-semibold text-base-content">OpenAI</span> 和 <span className="font-semibold text-base-content">Anthropic</span> 两种调用格式。可记录所有请求（仅捕获模式），也可将请求转发到真实上游模型（转发模式）。
+                Fake Model Gateway 是一个本地 AI API 代理，支持 <span className="font-semibold text-base-content">OpenAI</span> 和 <span className="font-semibold text-base-content">Anthropic</span> 两种调用格式。通过配置不同提供商，可将请求自动路由到对应的上游模型。
               </p>
             </section>
 
@@ -112,7 +112,7 @@ export const HelpModal = ({ open, onClose }: { open: boolean; onClose: () => voi
 
 const client = new OpenAI({
   baseURL: "${base}/v1",
-  apiKey: "fake-key",  // 仅捕获模式下可填任意值
+  apiKey: "your-api-key",
 });
 
 const resp = await client.chat.completions.create({
@@ -136,7 +136,7 @@ const resp = await client.chat.completions.create({
 
 const client = new Anthropic({
   baseURL: "${base}",
-  apiKey: "fake-key",  // 仅捕获模式下可填任意值
+  apiKey: "your-api-key",
 });
 
 const resp = await client.messages.create({
@@ -155,36 +155,39 @@ const resp = await client.messages.create({
             </section>
 
             <section>
-              <h4 className="mb-2 text-xs font-bold uppercase tracking-wider text-base-content/40">工作模式</h4>
+              <h4 className="mb-2 text-xs font-bold uppercase tracking-wider text-base-content/40">工作原理</h4>
               <div className="space-y-2">
                 <div className="rounded-lg border border-base-content/8 bg-base-100 px-3 py-2">
                   <div className="flex items-center gap-2 mb-1">
-                    <Shield size={12} className="text-base-content/50" />
-                    <span className="font-semibold text-xs">仅捕获模式</span>
-                    <Badge variant="default">默认</Badge>
+                    <Server size={12} className="text-base-content/50" />
+                    <span className="font-semibold text-xs">提供商</span>
+                    <Badge variant="default">核心</Badge>
                   </div>
-                  <p className="text-xs text-base-content/55 leading-relaxed">不转发请求，返回假响应。用于调试 prompt、记录请求内容，无需真实 API Key。</p>
+                  <p className="text-xs text-base-content/55 leading-relaxed">在配置中添加提供商（如 OpenAI、Kimi、MiniMax 等），填写 API Key 后即可使用对应模型。支持 OpenAI 和 Claude 两种格式。</p>
                 </div>
                 <div className="rounded-lg border border-base-content/8 bg-base-100 px-3 py-2">
                   <div className="flex items-center gap-2 mb-1">
                     <ArrowUpDown size={12} className="text-info/70" />
-                    <span className="font-semibold text-xs">转发模式</span>
+                    <span className="font-semibold text-xs">模型路由</span>
                   </div>
-                  <p className="text-xs text-base-content/55 leading-relaxed">将请求转发到配置的上游 URL，记录真实响应。需在配置中填写 Base URL 和 API Key。</p>
+                  <p className="text-xs text-base-content/55 leading-relaxed">请求中的 model 参数会自动匹配到对应的提供商。例如 model 为 "gpt-4o" 时自动路由到 OpenAI 提供商。</p>
                 </div>
               </div>
             </section>
 
             <section>
-              <h4 className="mb-2 text-xs font-bold uppercase tracking-wider text-base-content/40">转发模式配置示例</h4>
+              <h4 className="mb-2 text-xs font-bold uppercase tracking-wider text-base-content/40">内置提供商</h4>
               <div className="space-y-1.5 text-xs text-base-content/60">
                 <div className="grid grid-cols-3 gap-1 font-mono">
-                  <span className="text-base-content/40">平台</span>
-                  <span className="text-base-content/40">Base URL</span>
-                  <span className="text-base-content/40">API 格式</span>
-                  <span>OpenAI</span><span>https://api.openai.com/v1</span><span>Chat</span>
-                  <span>Anthropic</span><span>https://api.anthropic.com</span><span>Messages</span>
-                  <span>第三方</span><span>https://your-proxy.com/v1</span><span>Chat / Messages</span>
+                  <span className="text-base-content/40">提供商</span>
+                  <span className="text-base-content/40">格式</span>
+                  <span className="text-base-content/40">鉴权</span>
+                  <span>OpenAI</span><span>Chat</span><span>Bearer</span>
+                  <span>Anthropic</span><span>Messages</span><span>x-api-key</span>
+                  <span>Kimi</span><span>Messages</span><span>x-api-key</span>
+                  <span>MiniMax</span><span>Messages</span><span>x-api-key</span>
+                  <span>DeepSeek</span><span>Chat</span><span>Bearer</span>
+                  <span>SiliconFlow</span><span>Chat</span><span>Bearer</span>
                 </div>
               </div>
             </section>

@@ -1,6 +1,6 @@
 import { format, formatDistanceToNow } from "date-fns";
 import { zhCN } from "date-fns/locale";
-import type { ApiType, ProxyConfig, DashboardMeta, ChatMessage } from "./types";
+import type { ApiType, ProxyConfig, DashboardMeta, ChatMessage, Provider, ApiKey } from "./types";
 
 export const PAGE_SIZE = 50;
 export const RENDER_BATCH_SIZE = 30;
@@ -29,8 +29,127 @@ export const defaultConfig: ProxyConfig = normalizeConfig();
 export const emptyMeta: DashboardMeta = {
   stats: { totalRequests: 0, totalPromptTokens: 0, totalForwarded: 0, totalCaptureOnly: 0 },
   config: defaultConfig,
+  providers: [],
+  apiKeys: [],
   models: [],
 };
+
+export type BuiltinProviderConfig = {
+  name: string;
+  baseUrl: string;
+  path: string;
+  apiType: ApiType;
+  format: "openai" | "claude" | "gemini" | "ollama";
+  authStyle: "bearer" | "x-api-key";
+  models?: string[];
+};
+
+export const BUILTIN_PROVIDERS: Record<string, BuiltinProviderConfig> = {
+  kimi: {
+    name: "Kimi",
+    baseUrl: "https://api.kimi.com/coding/v1/messages",
+    path: "",
+    apiType: "chat_completions",
+    format: "claude",
+    authStyle: "x-api-key",
+    models: ["kimi-k2.5", "moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"],
+  },
+  minimax: {
+    name: "MiniMax (国际版)",
+    baseUrl: "https://api.minimax.io/anthropic/v1/messages",
+    path: "",
+    apiType: "chat_completions",
+    format: "claude",
+    authStyle: "x-api-key",
+    models: ["MiniMax-Text-01", "abab6.5s-chat"],
+  },
+  "minimax-cn": {
+    name: "MiniMax (中国版)",
+    baseUrl: "https://api.minimaxi.com/anthropic/v1/messages",
+    path: "",
+    apiType: "chat_completions",
+    format: "claude",
+    authStyle: "x-api-key",
+    models: ["MiniMax-Text-01", "abab6.5s-chat", "abab7-chat-preview"],
+  },
+  openai: {
+    name: "OpenAI",
+    baseUrl: "https://api.openai.com/v1/chat/completions",
+    path: "",
+    apiType: "chat_completions",
+    format: "openai",
+    authStyle: "bearer",
+    models: ["gpt-4o", "gpt-4o-mini", "o3-mini"],
+  },
+  deepseek: {
+    name: "DeepSeek",
+    baseUrl: "https://api.deepseek.com/v1/chat/completions",
+    path: "",
+    apiType: "chat_completions",
+    format: "openai",
+    authStyle: "bearer",
+    models: ["deepseek-chat", "deepseek-reasoner"],
+  },
+  siliconflow: {
+    name: "SiliconFlow",
+    baseUrl: "https://api.siliconflow.cn/v1/chat/completions",
+    path: "",
+    apiType: "chat_completions",
+    format: "openai",
+    authStyle: "bearer",
+    models: ["deepseek-ai/DeepSeek-V3", "deepseek-ai/DeepSeek-R1"],
+  },
+  glm: {
+    name: "智谱 GLM",
+    baseUrl: "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+    path: "",
+    apiType: "chat_completions",
+    format: "openai",
+    authStyle: "bearer",
+    models: ["glm-4", "glm-4-flash", "glm-4-plus"],
+  },
+  qwen: {
+    name: "通义千问",
+    baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+    path: "",
+    apiType: "chat_completions",
+    format: "openai",
+    authStyle: "bearer",
+    models: ["qwen-max", "qwen-plus", "qwen-turbo"],
+  },
+  custom: {
+    name: "自定义",
+    baseUrl: "",
+    path: "/v1/chat/completions",
+    apiType: "chat_completions",
+    format: "openai",
+    authStyle: "bearer",
+    models: [],
+  },
+};
+
+export const getBuiltinProviderConfig = (type: string): BuiltinProviderConfig | undefined =>
+  BUILTIN_PROVIDERS[type];
+
+export const defaultProviderTemplates: Record<string, Omit<Provider, "id" | "createdAt" | "enabled">> = Object.fromEntries(
+  Object.entries(BUILTIN_PROVIDERS).map(([key, cfg]) => [
+    key,
+    {
+      name: cfg.name,
+      providerType: key,
+      baseUrl: cfg.baseUrl,
+      apiKey: "",
+      path: cfg.path,
+      apiType: cfg.apiType,
+      format: cfg.format,
+      authStyle: cfg.authStyle,
+      models: cfg.models ?? [],
+    },
+  ])
+);
+
+export const generateProviderId = (name: string) =>
+  name.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32) || "provider";
 
 export const formatTime = (iso: string) =>
   format(new Date(iso), "MM-dd HH:mm:ss", { locale: zhCN });
@@ -76,7 +195,12 @@ const formatToolCall = (name: string, args: string): string => {
 
 export const getResponseText = (v: unknown): string => {
   if (!v || typeof v !== "object") return "";
-  const r = v as Record<string, unknown>;
+  let r = v as Record<string, unknown>;
+
+  // Unwrap server-side `rawResponse` wrapper (non-streaming)
+  if (typeof r.rawResponse === "object" && r.rawResponse !== null) {
+    r = r.rawResponse as Record<string, unknown>;
+  }
 
   // Streaming stored format
   if (typeof r.assistant === "string" && r.assistant.trim()) {
@@ -139,12 +263,22 @@ export const getResponseText = (v: unknown): string => {
   if (typeof r.rawSse === "string" && r.rawSse) {
     return extractFromOaiRawSse(r.rawSse).content;
   }
+  // Fallback: parse translated SSE
+  if (typeof r.translatedSse === "string" && r.translatedSse) {
+    return extractFromOaiRawSse(r.translatedSse).content;
+  }
   return "";
 };
 
 export const getReasoningText = (v: unknown): string => {
   if (!v || typeof v !== "object") return "";
-  const r = v as Record<string, unknown>;
+  let r = v as Record<string, unknown>;
+
+  // Unwrap server-side `rawResponse` wrapper (non-streaming)
+  if (typeof r.rawResponse === "object" && r.rawResponse !== null) {
+    r = r.rawResponse as Record<string, unknown>;
+  }
+
   // Streaming stored reasoning
   if (typeof r.reasoning === "string" && r.reasoning.trim()) return r.reasoning;
   // OpenAI non-streaming: choices[0].message.reasoning_content
@@ -165,23 +299,56 @@ export const getReasoningText = (v: unknown): string => {
   if (typeof r.rawSse === "string" && r.rawSse) {
     return extractFromOaiRawSse(r.rawSse).reasoning;
   }
+  // Fallback: parse translated SSE
+  if (typeof r.translatedSse === "string" && r.translatedSse) {
+    return extractFromOaiRawSse(r.translatedSse).reasoning;
+  }
   return "";
 };
 
+export const getUsageFromResponse = (v: unknown): { promptTokens: number; completionTokens: number; totalTokens: number } | null => {
+  if (!v || typeof v !== "object") return null;
+  let r = v as Record<string, unknown>;
+
+  // Unwrap server-side rawResponse wrapper
+  if (typeof r.rawResponse === "object" && r.rawResponse !== null) {
+    r = r.rawResponse as Record<string, unknown>;
+  }
+
+  const usage = r.usage as Record<string, unknown> | undefined;
+  if (!usage) return null;
+
+  // OpenAI-style: prompt_tokens / completion_tokens / total_tokens
+  let promptTokens = 0;
+  let completionTokens = 0;
+  let totalTokens = 0;
+
+  if (typeof usage.prompt_tokens === "number") promptTokens = usage.prompt_tokens;
+  if (typeof usage.completion_tokens === "number") completionTokens = usage.completion_tokens;
+  if (typeof usage.total_tokens === "number") totalTokens = usage.total_tokens;
+
+  // Anthropic-style: input_tokens / output_tokens
+  if (!promptTokens && typeof usage.input_tokens === "number") promptTokens = usage.input_tokens;
+  if (!completionTokens && typeof usage.output_tokens === "number") completionTokens = usage.output_tokens;
+
+  if (!promptTokens && !completionTokens && !totalTokens) return null;
+
+  if (!totalTokens && (promptTokens || completionTokens)) {
+    totalTokens = promptTokens + completionTokens;
+  }
+  return { promptTokens, completionTokens, totalTokens };
+};
+
 export const getCompletionTokens = (v: unknown): number => {
+  const usage = getUsageFromResponse(v);
+  if (usage) return usage.completionTokens;
+
   if (!v || typeof v !== "object") return 0;
   const r = v as {
-    usage?: { completion_tokens?: number; output_tokens?: number };
     stream?: boolean;
     assistant?: string;
     content?: string;
   };
-  if (r.usage?.completion_tokens && typeof r.usage.completion_tokens === "number") {
-    return r.usage.completion_tokens;
-  }
-  if (r.usage?.output_tokens && typeof r.usage.output_tokens === "number") {
-    return r.usage.output_tokens;
-  }
   if (r.stream) {
     const text = typeof r.assistant === "string" ? r.assistant : typeof r.content === "string" ? r.content : "";
     return text ? Math.max(1, Math.ceil(text.length / 4)) : 0;

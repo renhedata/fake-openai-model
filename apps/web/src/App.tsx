@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity, ArrowUpDown, BookOpen, Calendar, CheckSquare, ChevronDown,
-  Clipboard, Coins, Filter, Loader2, MinusSquare, Moon, Radio, Search, Send,
+  Clipboard, Coins, Filter, Key, Loader2, MinusSquare, Moon, Radio, Search, Send,
   Server, Settings2, Shield, Square, Sun, Trash2, X, Zap,
 } from "lucide-react";
-import type { ApiType, DashboardEvent, ExchangeRecord, ModelRecord, ProxyConfig, UpstreamTestResult } from "./types";
+import type { DashboardEvent, ExchangeRecord, ModelRecord, Provider, ApiKey, UpstreamTestResult } from "./types";
 import { type PaginatedResult } from "./types";
 import {
   PAGE_SIZE,
-  apiTypeToPath, normalizeConfig, defaultConfig, emptyMeta,
+  normalizeConfig, emptyMeta,
   getCompletionTokens, getResponseText, getReasoningText,
 } from "./utils";
 import { Badge, StatMini, StatusDot } from "./components/Atoms";
@@ -21,22 +21,17 @@ import { SettingsDrawer } from "./components/SettingsDrawer";
 
 export const App = () => {
   const [dashboardMeta, setDashboardMeta] = useState(emptyMeta);
-  const [configForm, setConfigForm] = useState<ProxyConfig>(defaultConfig);
   const [connected, setConnected] = useState(false);
 
-  const [isDirty, setIsDirty] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState("");
-  const [saveHint, setSaveHint] = useState("");
-  const [lastSavedAt, setLastSavedAt] = useState("");
+  // Provider state
+  const [providerLoading, setProviderLoading] = useState(false);
+  const [providerError, setProviderError] = useState("");
+  const [providerSuccess, setProviderSuccess] = useState("");
 
-  const [syncingModels, setSyncingModels] = useState(false);
-  const [syncError, setSyncError] = useState("");
-  const [syncSuccess, setSyncSuccess] = useState("");
-
-  const [testingUpstream, setTestingUpstream] = useState(false);
-  const [testError, setTestError] = useState("");
-  const [testResult, setTestResult] = useState<UpstreamTestResult | null>(null);
+  // API Key state
+  const [apiKeyLoading, setApiKeyLoading] = useState(false);
+  const [apiKeyError, setApiKeyError] = useState("");
+  const [apiKeySuccess, setApiKeySuccess] = useState("");
 
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -44,6 +39,8 @@ export const App = () => {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchInput, setSearchInput] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | "success" | "error" | "pending">("all");
+  const [apiKeyFilter, setApiKeyFilter] = useState("");
+  const [agentTypeFilter, setAgentTypeFilter] = useState<"all" | "openclaw" | "hermes">("all");
 
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
@@ -71,9 +68,6 @@ export const App = () => {
     localStorage.setItem("theme", next);
   }, [isDark]);
 
-  const dirtyRef = useRef(false);
-  const lastSavedSignatureRef = useRef(JSON.stringify(defaultConfig));
-
   const fetchExchanges = useCallback(async (cursor?: string) => {
     const params = new URLSearchParams();
     params.set("limit", String(PAGE_SIZE));
@@ -81,11 +75,13 @@ export const App = () => {
     if (dateFrom) params.set("dateFrom", new Date(dateFrom + "T00:00:00").toISOString());
     if (dateTo) params.set("dateTo", new Date(dateTo + "T23:59:59.999").toISOString());
     if (statusFilter !== "all") params.set("status", statusFilter);
+    if (apiKeyFilter) params.set("apiKeyId", apiKeyFilter);
+    if (agentTypeFilter !== "all") params.set("agentType", agentTypeFilter);
     if (searchQuery.trim()) params.set("search", searchQuery.trim());
     const r = await fetch(`/exchanges?${params.toString()}`);
     if (!r.ok) return null;
     return (await r.json()) as PaginatedResult;
-  }, [dateFrom, dateTo, statusFilter, searchQuery]);
+  }, [dateFrom, dateTo, statusFilter, searchQuery, apiKeyFilter, agentTypeFilter]);
 
   const loadInitialPage = useCallback(async () => {
     const result = await fetchExchanges();
@@ -132,8 +128,7 @@ export const App = () => {
           const meta = data.meta ?? null;
           if (meta) {
             const nc = normalizeConfig(meta.config);
-            setDashboardMeta({ stats: meta.stats, config: nc, models: meta.models });
-            if (!dirtyRef.current) { setConfigForm(nc); lastSavedSignatureRef.current = JSON.stringify(nc); }
+            setDashboardMeta({ stats: meta.stats, config: nc, providers: meta.providers ?? [], apiKeys: meta.apiKeys ?? [], models: meta.models });
           }
           if (data.type === "update" && !data.latest && meta) {
             // Server emitted null latest (deletion or config change) — refresh list
@@ -162,13 +157,15 @@ export const App = () => {
   const filteredItems = useMemo(() => {
     let items = paginatedItems;
     if (statusFilter !== "all") items = items.filter((i) => i.responseStatus === statusFilter);
+    if (apiKeyFilter) items = items.filter((i) => i.apiKeyId === apiKeyFilter);
+    if (agentTypeFilter !== "all") items = items.filter((i) => i.agentType === agentTypeFilter);
     const q = searchQuery.trim().toLowerCase();
     if (q) items = items.filter((i) =>
       i.prompt.toLowerCase().includes(q) || i.model.toLowerCase().includes(q) ||
       i.id.toLowerCase().includes(q) || (i.errorMessage ?? "").toLowerCase().includes(q)
     );
     return items;
-  }, [paginatedItems, statusFilter, searchQuery]);
+  }, [paginatedItems, statusFilter, searchQuery, apiKeyFilter, agentTypeFilter]);
 
   const totalCompletionTokens = useMemo(
     () => paginatedItems.reduce((sum, i) => sum + getCompletionTokens(i.responseBody), 0),
@@ -186,75 +183,124 @@ export const App = () => {
     } catch { return raw; }
   }, []);
 
-  const markDirty = useCallback(() => {
-    dirtyRef.current = true;
-    setIsDirty(true);
-    setSaveError("");
-    setSaveHint("已修改…");
-  }, []);
-
-  const onConfigChange = useCallback(<K extends keyof ProxyConfig>(key: K, value: ProxyConfig[K]) => {
-    setConfigForm((p) => ({ ...p, [key]: value }));
-    markDirty();
-  }, [markDirty]);
-
-  const onApiTypeChange = useCallback((apiType: ApiType) => {
-    setConfigForm((p) => ({ ...p, apiType, path: apiTypeToPath(apiType) }));
-    markDirty();
-  }, [markDirty]);
-
-  const saveConfig = useCallback(async (nc: ProxyConfig) => {
-    const sig = JSON.stringify(nc);
-    if (sig === lastSavedSignatureRef.current) {
-      dirtyRef.current = false; setIsDirty(false); setSaveHint("已保存"); return true;
-    }
-    setSaving(true); setSaveError("");
+  // Provider CRUD
+  const onAddProvider = useCallback(async (provider: Omit<Provider, "id" | "createdAt" | "enabled">) => {
+    setProviderLoading(true); setProviderError(""); setProviderSuccess("");
     try {
-      const r = await fetch("/proxy/config", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(nc) });
+      const r = await fetch("/proxy/providers", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(provider) });
       if (!r.ok) throw new Error(await readErrorMessage(r));
-      const updated = normalizeConfig((await r.json()) as ProxyConfig);
-      setConfigForm(updated);
-      setDashboardMeta((p) => ({ ...p, config: updated }));
-      lastSavedSignatureRef.current = JSON.stringify(updated);
-      dirtyRef.current = false; setIsDirty(false);
-      setLastSavedAt(new Date().toISOString());
-      setSaveHint("已保存");
-      return true;
-    } catch (e) { setSaveError(e instanceof Error ? e.message : "保存失败"); setSaveHint(""); return false; }
-    finally { setSaving(false); }
+      const created = (await r.json()) as Provider;
+      setDashboardMeta((prev) => ({
+        ...prev,
+        providers: prev.providers.some((p) => p.id === created.id)
+          ? prev.providers.map((p) => (p.id === created.id ? created : p))
+          : [...prev.providers, created],
+      }));
+      setProviderSuccess(`已添加提供商 ${created.name}`);
+    } catch (e) { setProviderError(e instanceof Error ? e.message : "添加失败"); }
+    finally { setProviderLoading(false); }
   }, [readErrorMessage]);
 
-  useEffect(() => {
-    if (!isDirty) return;
-    const t = window.setTimeout(() => void saveConfig(configForm), 800);
-    return () => window.clearTimeout(t);
-  }, [configForm, isDirty, saveConfig]);
-
-  const refreshUpstreamModels = useCallback(async () => {
-    setSyncingModels(true); setSyncError(""); setSyncSuccess("");
-    if (dirtyRef.current) { if (!(await saveConfig(configForm))) { setSyncingModels(false); return; } }
+  const onUpdateProvider = useCallback(async (id: string, patch: Partial<Provider>) => {
+    setProviderLoading(true); setProviderError(""); setProviderSuccess("");
     try {
-      const r = await fetch("/proxy/models/refresh", { method: "POST" });
+      const r = await fetch(`/proxy/providers/${id}`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(patch) });
+      if (!r.ok) throw new Error(await readErrorMessage(r));
+      const updated = (await r.json()) as Provider;
+      setDashboardMeta((prev) => ({
+        ...prev,
+        providers: prev.providers.map((p) => (p.id === id ? updated : p)),
+      }));
+      setProviderSuccess(`已更新提供商 ${updated.name}`);
+    } catch (e) { setProviderError(e instanceof Error ? e.message : "更新失败"); }
+    finally { setProviderLoading(false); }
+  }, [readErrorMessage]);
+
+  const onDeleteProvider = useCallback(async (id: string) => {
+    if (!window.confirm("确定要删除此提供商吗？关联的模型将失去绑定。")) return;
+    setProviderLoading(true); setProviderError(""); setProviderSuccess("");
+    try {
+      const r = await fetch(`/proxy/providers/${id}`, { method: "DELETE" });
+      if (!r.ok) throw new Error(await readErrorMessage(r));
+      setDashboardMeta((prev) => ({ ...prev, providers: prev.providers.filter((p) => p.id !== id) }));
+      setProviderSuccess("已删除提供商");
+    } catch (e) { setProviderError(e instanceof Error ? e.message : "删除失败"); }
+    finally { setProviderLoading(false); }
+  }, [readErrorMessage]);
+
+  const onTestProvider = useCallback(async (id: string) => {
+    const r = await fetch(`/proxy/providers/${id}/test`, { method: "POST" });
+    if (!r.ok) throw new Error(await readErrorMessage(r));
+    return (await r.json()) as UpstreamTestResult;
+  }, [readErrorMessage]);
+
+  const onTestModel = useCallback(async (modelId: string) => {
+    const r = await fetch(`/proxy/models/${encodeURIComponent(modelId)}/test`, { method: "POST" });
+    if (!r.ok) throw new Error(await readErrorMessage(r));
+    return (await r.json()) as UpstreamTestResult;
+  }, [readErrorMessage]);
+
+  const onRefreshProviderModels = useCallback(async (id: string) => {
+    const r = await fetch(`/proxy/providers/${id}/refresh`, { method: "POST" });
+    if (!r.ok) throw new Error(await readErrorMessage(r));
+    const payload = (await r.json()) as { data?: ModelRecord[] };
+    const m = payload.data ?? [];
+    setDashboardMeta((prev) => ({ ...prev, models: m }));
+  }, [readErrorMessage]);
+
+  // API Key CRUD
+  const onCreateApiKey = useCallback(async (name: string, allowedModels: string[] | null) => {
+    setApiKeyLoading(true); setApiKeyError(""); setApiKeySuccess("");
+    try {
+      const r = await fetch("/proxy/api-keys", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name, allowedModels }),
+      });
+      if (!r.ok) throw new Error(await readErrorMessage(r));
+      const created = (await r.json()) as ApiKey;
+      setDashboardMeta((prev) => ({
+        ...prev,
+        apiKeys: prev.apiKeys.some((k) => k.id === created.id)
+          ? prev.apiKeys.map((k) => (k.id === created.id ? created : k))
+          : [...prev.apiKeys, created],
+      }));
+      setApiKeySuccess(`已生成密钥 ${created.key.slice(0, 20)}…`);
+    } catch (e) { setApiKeyError(e instanceof Error ? e.message : "生成失败"); }
+    finally { setApiKeyLoading(false); }
+  }, [readErrorMessage]);
+
+  const onDeleteApiKey = useCallback(async (id: string) => {
+    if (!window.confirm("确定要删除此密钥吗？")) return;
+    setApiKeyLoading(true); setApiKeyError(""); setApiKeySuccess("");
+    try {
+      const r = await fetch(`/proxy/api-keys/${id}`, { method: "DELETE" });
+      if (!r.ok) throw new Error(await readErrorMessage(r));
+      setDashboardMeta((prev) => ({ ...prev, apiKeys: prev.apiKeys.filter((k) => k.id !== id) }));
+      setApiKeySuccess("已删除密钥");
+    } catch (e) { setApiKeyError(e instanceof Error ? e.message : "删除失败"); }
+    finally { setApiKeyLoading(false); }
+  }, [readErrorMessage]);
+
+  // Model management
+  const onAddModel = useCallback(async (model: Omit<ModelRecord, "object" | "created" | "owned_by"> & Partial<Pick<ModelRecord, "object" | "created" | "owned_by">>) => {
+    try {
+      const r = await fetch("/proxy/models", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(model) });
       if (!r.ok) throw new Error(await readErrorMessage(r));
       const payload = (await r.json()) as { data?: ModelRecord[] };
-      const m = payload.data ?? [];
-      setDashboardMeta((p) => ({ ...p, models: m }));
-      setSyncSuccess(`已同步 ${m.length} 个模型`);
-      if (configForm.modelOverride && !m.some((x) => x.id === configForm.modelOverride)) onConfigChange("modelOverride", "");
-    } catch (e) { setSyncError(e instanceof Error ? e.message : "同步失败"); }
-    finally { setSyncingModels(false); }
-  }, [configForm, onConfigChange, readErrorMessage, saveConfig]);
+      setDashboardMeta((prev) => ({ ...prev, models: payload.data ?? prev.models }));
+    } catch (e) { console.error(e instanceof Error ? e.message : "添加模型失败"); }
+  }, [readErrorMessage]);
 
-  const runUpstreamTest = useCallback(async () => {
-    setTestingUpstream(true); setTestError(""); setTestResult(null);
-    if (dirtyRef.current) { if (!(await saveConfig(configForm))) { setTestingUpstream(false); return; } }
+  const onDeleteModel = useCallback(async (id: string) => {
+    if (!window.confirm(`确定要删除模型 '${id}' 吗？`)) return;
     try {
-      const r = await fetch("/proxy/test", { method: "POST" });
+      const r = await fetch(`/proxy/models/${id}`, { method: "DELETE" });
       if (!r.ok) throw new Error(await readErrorMessage(r));
-      setTestResult((await r.json()) as UpstreamTestResult);
-    } catch (e) { setTestError(e instanceof Error ? e.message : "测试失败"); }
-    finally { setTestingUpstream(false); }
-  }, [configForm, readErrorMessage, saveConfig]);
+      const payload = (await r.json()) as { data?: ModelRecord[] };
+      setDashboardMeta((prev) => ({ ...prev, models: payload.data ?? prev.models.filter((m) => m.id !== id) }));
+    } catch (e) { console.error(e instanceof Error ? e.message : "删除模型失败"); }
+  }, [readErrorMessage]);
 
   const loadMore = useCallback(async () => {
     if (!nextCursor || loadingMore) return;
@@ -416,9 +462,6 @@ export const App = () => {
           </div>
           <h1 className="text-sm font-bold">Fake Model Gateway</h1>
           <div className="hidden items-center gap-2 sm:flex">
-            <Badge variant={dashboardMeta.config.mode === "forward" ? "info" : "default"}>
-              {dashboardMeta.config.mode === "forward" ? "Forward" : "Capture"}
-            </Badge>
             <StatusDot ok={connected} label={connected ? "Live" : "Off"} />
           </div>
         </div>
@@ -442,13 +485,12 @@ export const App = () => {
       </header>
 
       {/* stats row */}
-      <div className="shrink-0 grid grid-cols-2 gap-2 border-b border-base-content/5 bg-base-300/50 px-4 py-2 sm:grid-cols-4 lg:grid-cols-6">
+      <div className="shrink-0 grid grid-cols-2 gap-2 border-b border-base-content/5 bg-base-300/50 px-4 py-2 sm:grid-cols-3 lg:grid-cols-5">
         <StatMini icon={Activity}    label="请求"    value={stats.totalRequests}                                       delay={0} />
         <StatMini icon={Send}        label="入 Tokens" value={stats.totalPromptTokens.toLocaleString()}               delay={50} />
         <StatMini icon={Zap}         label="出 Tokens" value={totalCompletionTokens.toLocaleString()}                 delay={100} />
         <StatMini icon={Coins}       label="总 Tokens" value={(stats.totalPromptTokens + totalCompletionTokens).toLocaleString()} delay={150} />
         <StatMini icon={ArrowUpDown} label="转发"    value={stats.totalForwarded}                                     delay={200} />
-        <StatMini icon={Shield}      label="捕获"    value={stats.totalCaptureOnly}                                   delay={250} />
       </div>
 
       {/* search + filter bar */}
@@ -525,6 +567,34 @@ export const App = () => {
                 </button>
               ))}
             </div>
+            {dashboardMeta.apiKeys.length > 0 && (
+              <div className="flex items-center gap-1">
+                <Key size={11} className="text-base-content/30" />
+                <select
+                  className="select select-bordered select-xs h-6 min-h-0 text-[10px] bg-base-100 py-0 pr-6 pl-2"
+                  value={apiKeyFilter}
+                  onChange={(e) => setApiKeyFilter(e.target.value)}
+                >
+                  <option value="">全部密钥</option>
+                  {dashboardMeta.apiKeys.map((k) => (
+                    <option key={k.id} value={k.id}>{k.name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+            <div className="flex items-center gap-1">
+              <Shield size={11} className="text-base-content/30" />
+              {(["all", "openclaw", "hermes"] as const).map((a) => (
+                <button
+                  key={a}
+                  type="button"
+                  className={`rounded border px-2 py-0.5 text-[10px] font-medium transition-colors ${agentTypeFilter === a ? "border-primary bg-primary/15 text-primary" : "border-base-content/10 text-base-content/40 hover:text-base-content/60"}`}
+                  onClick={() => setAgentTypeFilter(a)}
+                >
+                  {a === "all" ? "全部" : a === "openclaw" ? "OpenClaw" : "Hermes"}
+                </button>
+              ))}
+            </div>
             <div className="relative" ref={dateDropdownRef}>
               <button
                 type="button"
@@ -566,8 +636,8 @@ export const App = () => {
               {filteredItems.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-16 text-base-content/25 animate-fade-slide-in">
                   <Radio size={28} className="mb-2 opacity-30" />
-                  <p className="text-sm">{searchQuery || statusFilter !== "all" || hasDateFilter ? "无匹配记录" : "等待请求中…"}</p>
-                  {!searchQuery && statusFilter === "all" && !hasDateFilter && (
+                  <p className="text-sm">{searchQuery || statusFilter !== "all" || hasDateFilter || apiKeyFilter || agentTypeFilter !== "all" ? "无匹配记录" : "等待请求中…"}</p>
+                  {!searchQuery && statusFilter === "all" && !hasDateFilter && !apiKeyFilter && agentTypeFilter === "all" && (
                     <p className="mt-1 text-xs text-base-content/15">发送一个 API 请求到代理端点开始使用</p>
                   )}
                 </div>
@@ -603,12 +673,26 @@ export const App = () => {
 
       <HelpModal open={helpOpen} onClose={() => setHelpOpen(false)} />
       <SettingsDrawer
-        open={settingsOpen} configForm={configForm} models={dashboardMeta.models}
-        saving={saving} isDirty={isDirty} saveHint={saveHint} lastSavedAt={lastSavedAt} saveError={saveError}
-        syncingModels={syncingModels} syncSuccess={syncSuccess} syncError={syncError}
-        testingUpstream={testingUpstream} testResult={testResult} testError={testError}
-        onClose={() => setSettingsOpen(false)} onConfigChange={onConfigChange}
-        onApiTypeChange={onApiTypeChange} onRefreshModels={refreshUpstreamModels} onRunTest={runUpstreamTest}
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        providers={dashboardMeta.providers}
+        models={dashboardMeta.models}
+        providerLoading={providerLoading}
+        providerError={providerError}
+        providerSuccess={providerSuccess}
+        onAddProvider={onAddProvider}
+        onUpdateProvider={onUpdateProvider}
+        onDeleteProvider={onDeleteProvider}
+        onRefreshProviderModels={onRefreshProviderModels}
+        onTestModel={onTestModel}
+        onAddModel={onAddModel}
+        onDeleteModel={onDeleteModel}
+        apiKeys={dashboardMeta.apiKeys}
+        apiKeyLoading={apiKeyLoading}
+        apiKeyError={apiKeyError}
+        apiKeySuccess={apiKeySuccess}
+        onCreateApiKey={onCreateApiKey}
+        onDeleteApiKey={onDeleteApiKey}
       />
     </div>
   );
