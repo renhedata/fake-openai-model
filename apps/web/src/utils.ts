@@ -186,6 +186,48 @@ const extractFromOaiRawSse = (rawSse: string): { content: string; reasoning: str
   return { content: content.trim(), reasoning: reasoning.trim() };
 };
 
+/** Extract content and reasoning from Anthropic-format rawSse string */
+const extractFromAnthropicRawSse = (rawSse: string): { content: string; reasoning: string } => {
+  let content = "";
+  let reasoning = "";
+  let currentEvent = "";
+  for (const line of rawSse.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) { currentEvent = ""; continue; }
+    if (trimmed.startsWith("event:")) {
+      currentEvent = trimmed.slice(6).trim();
+      continue;
+    }
+    if (trimmed.startsWith("data:")) {
+      const data = trimmed.slice(5).trim();
+      if (!data) continue;
+      try {
+        const parsed = JSON.parse(data) as Record<string, unknown>;
+        const delta = parsed.delta as Record<string, unknown> | undefined;
+        if (delta) {
+          if (delta.type === "text_delta" && typeof delta.text === "string") {
+            content += delta.text;
+          }
+          if (delta.type === "thinking_delta" && typeof delta.thinking === "string") {
+            reasoning += delta.thinking;
+          }
+          if (delta.type === "input_json_delta" && typeof delta.partial_json === "string") {
+            // Tool use args streaming — collect if needed, but getResponseText doesn't show partial args
+          }
+        }
+        // Also handle content_block_start for text blocks
+        if (parsed.type === "content_block_start") {
+          const cb = parsed.content_block as Record<string, unknown> | undefined;
+          if (cb?.type === "text" && typeof cb.text === "string") {
+            content += cb.text;
+          }
+        }
+      } catch { /* skip unparseable */ }
+    }
+  }
+  return { content: content.trim(), reasoning: reasoning.trim() };
+};
+
 /** Format a tool call for display. */
 const formatToolCall = (name: string, args: string): string => {
   let pretty = args;
@@ -259,8 +301,10 @@ export const getResponseText = (v: unknown): string => {
     }
   }
 
-  // Fallback: parse OAI-format rawSse
+  // Fallback: parse Anthropic-format rawSse first
   if (typeof r.rawSse === "string" && r.rawSse) {
+    const anthropic = extractFromAnthropicRawSse(r.rawSse);
+    if (anthropic.content || anthropic.reasoning) return anthropic.content;
     return extractFromOaiRawSse(r.rawSse).content;
   }
   // Fallback: parse translated SSE
@@ -295,8 +339,10 @@ export const getReasoningText = (v: unknown): string => {
       .join("\n\n");
     if (thinking.trim()) return thinking;
   }
-  // Fallback: parse OAI-format rawSse
+  // Fallback: parse Anthropic-format rawSse first
   if (typeof r.rawSse === "string" && r.rawSse) {
+    const anthropic = extractFromAnthropicRawSse(r.rawSse);
+    if (anthropic.content || anthropic.reasoning) return anthropic.reasoning;
     return extractFromOaiRawSse(r.rawSse).reasoning;
   }
   // Fallback: parse translated SSE
