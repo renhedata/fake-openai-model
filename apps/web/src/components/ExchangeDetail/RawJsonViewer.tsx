@@ -1,4 +1,4 @@
-import { memo } from "react";
+import { memo, useState } from "react";
 import { CopyButton } from "../Atoms";
 import { safeStringify } from "../../utils";
 
@@ -11,6 +11,8 @@ const JsonBlock = memo(function JsonBlock({
   label?: string;
   data: unknown;
 }) {
+  const [wrap, setWrap] = useState(false);
+
   return (
     <div className="flex flex-col min-h-0 min-w-0">
       <div className="mb-1 flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-base-content/30">
@@ -20,9 +22,25 @@ const JsonBlock = memo(function JsonBlock({
             {label}
           </span>
         )}
+        <button
+          type="button"
+          onClick={() => setWrap((v) => !v)}
+          className={`rounded px-1 py-0 text-[9px] transition-colors cursor-pointer ${
+            wrap
+              ? "bg-primary/20 text-primary/80"
+              : "bg-base-content/5 text-base-content/30 hover:text-base-content/50"
+          }`}
+          title={wrap ? "关闭自动换行" : "开启自动换行"}
+        >
+          {wrap ? "换行: 开" : "换行: 关"}
+        </button>
         <CopyButton text={safeStringify(data)} />
       </div>
-      <pre className="flex-1 overflow-auto rounded-lg bg-base-300 p-3 text-[11px] text-base-content/60 mono leading-relaxed max-w-full whitespace-pre-wrap break-words">
+      <pre
+        className={`flex-1 overflow-auto rounded-lg bg-base-300 p-3 text-[11px] text-base-content/60 mono leading-relaxed max-w-full ${
+          wrap ? "whitespace-pre-wrap break-words" : "whitespace-pre"
+        }`}
+      >
         {safeStringify(data)}
       </pre>
     </div>
