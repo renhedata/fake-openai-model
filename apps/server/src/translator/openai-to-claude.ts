@@ -136,6 +136,28 @@ function convertOpenAIToolChoice(choice: unknown): Record<string, unknown> {
   return { type: "auto" };
 }
 
+function convertOpenAIFunctionsToTools(functions: unknown): Array<Record<string, unknown>> | undefined {
+  if (!Array.isArray(functions)) return undefined;
+  return functions.map((fn) => ({
+    type: "function",
+    function: fn,
+  }));
+}
+
+function convertOpenAIFunctionCallToToolChoice(functionCall: unknown): Record<string, unknown> | undefined {
+  if (!functionCall) return undefined;
+  if (typeof functionCall === "string") {
+    if (functionCall === "none") return { type: "none" };
+    if (functionCall === "auto") return { type: "auto" };
+    return { type: "auto" };
+  }
+  if (typeof functionCall === "object" && functionCall !== null) {
+    const fc = functionCall as { name?: string };
+    if (fc.name) return { type: "tool", name: fc.name };
+  }
+  return undefined;
+}
+
 function adjustMaxTokens(body: Record<string, unknown>): number {
   const max = body.max_tokens ?? body.max_completion_tokens;
   if (typeof max === "number" && max > 0) return max;
@@ -247,10 +269,14 @@ export function openaiToClaudeRequest(model: string, body: Record<string, unknow
     result.system = [claudeCodePrompt];
   }
 
-  // Tools
-  if (body.tools && Array.isArray(body.tools)) {
+  // Tools (support both `tools` and legacy `functions`)
+  const toolsSource = body.tools && Array.isArray(body.tools)
+    ? (body.tools as Array<Record<string, unknown>>)
+    : convertOpenAIFunctionsToTools(body.functions);
+
+  if (toolsSource) {
     result.tools = [];
-    for (const tool of body.tools as Array<Record<string, unknown>>) {
+    for (const tool of toolsSource) {
       const toolType = tool.type as string | undefined;
       if (toolType && toolType !== "function") {
         result.tools.push(tool as unknown as ClaudeTool);
@@ -273,9 +299,13 @@ export function openaiToClaudeRequest(model: string, body: Record<string, unknow
     }
   }
 
-  // Tool choice
-  if (body.tool_choice) {
-    result.tool_choice = convertOpenAIToolChoice(body.tool_choice);
+  // Tool choice (support both `tool_choice` and legacy `function_call`)
+  const toolChoiceSource = body.tool_choice
+    ? body.tool_choice
+    : convertOpenAIFunctionCallToToolChoice(body.function_call);
+
+  if (toolChoiceSource) {
+    result.tool_choice = convertOpenAIToolChoice(toolChoiceSource);
   }
 
   // Thinking
