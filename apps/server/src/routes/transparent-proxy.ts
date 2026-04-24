@@ -2,6 +2,7 @@ import { Router } from "express";
 import { getProxyConfig } from "../state.js";
 import { resolveUpstreamUrl } from "../utils/url.js";
 import { buildForwardHeaders } from "../utils/headers.js";
+import { fetchWithRetry } from "../utils/fetch-retry.js";
 
 export const transparentProxyRouter = Router();
 
@@ -40,14 +41,20 @@ transparentProxyRouter.all("/v1/*", async (req, res) => {
 
   const forwardHeaders = buildForwardHeaders(req, config.apiKey);
   const hasBody = !["GET", "HEAD"].includes(req.method);
+  const isStreaming = !!(hasBody && req.body && (req.body as Record<string, unknown>).stream === true);
 
   try {
-    const upstreamResponse = await fetch(upstreamUrl, {
-      method: req.method,
-      headers: forwardHeaders,
-      ...(hasBody && req.body ? { body: JSON.stringify(req.body) } : {}),
-      signal: AbortSignal.timeout(120_000),
-    });
+    const upstreamResponse = isStreaming
+      ? await fetch(upstreamUrl, {
+          method: req.method,
+          headers: forwardHeaders,
+          ...(hasBody && req.body ? { body: JSON.stringify(req.body) } : {}),
+        })
+      : await fetchWithRetry(upstreamUrl, {
+          method: req.method,
+          headers: forwardHeaders,
+          ...(hasBody && req.body ? { body: JSON.stringify(req.body) } : {}),
+        });
 
     res.status(upstreamResponse.status);
 

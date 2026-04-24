@@ -17,6 +17,7 @@ import { resolveUpstreamUrl } from "../utils/url.js";
 import { buildForwardHeaders } from "../utils/headers.js";
 import { createOaiSseExtractor } from "../utils/sse-extractors.js";
 import { tryParseJson } from "../utils/json.js";
+import { fetchWithRetry } from "../utils/fetch-retry.js";
 
 export const chatCompletionsRouter = Router();
 
@@ -119,12 +120,19 @@ chatCompletionsRouter.post("/v1/chat/completions", async (req, res) => {
   const forwardHeaders = buildForwardHeaders(req, targetApiKey, authStyle);
 
   try {
-    const upstreamResponse = await fetch(upstreamUrl, {
-      method: "POST",
-      headers: forwardHeaders,
-      body: JSON.stringify(forwardBody),
-      signal: AbortSignal.timeout(120_000),
-    });
+    // Streaming: no timeout — wait indefinitely for upstream SSE
+    // Non-streaming: 5-minute timeout with 1 retry
+    const upstreamResponse = stream
+      ? await fetch(upstreamUrl, {
+          method: "POST",
+          headers: forwardHeaders,
+          body: JSON.stringify(forwardBody),
+        })
+      : await fetchWithRetry(upstreamUrl, {
+          method: "POST",
+          headers: forwardHeaders,
+          body: JSON.stringify(forwardBody),
+        });
 
     if (stream) {
       const contentType =

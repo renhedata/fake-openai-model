@@ -11,6 +11,7 @@ import { resolveUpstreamUrl } from "../utils/url.js";
 import { buildForwardHeaders } from "../utils/headers.js";
 import { createAnthropicSseExtractor, createOaiSseExtractor, type StoredToolCall } from "../utils/sse-extractors.js";
 import { tryParseJson } from "../utils/json.js";
+import { fetchWithRetry } from "../utils/fetch-retry.js";
 import type express from "express";
 
 export const messagesRouter = Router();
@@ -271,7 +272,9 @@ messagesRouter.post("/v1/messages", async (req, res) => {
   const forwardHeaders = buildForwardHeaders(req, targetApiKey, "x-api-key");
 
   try {
-    const upstreamResponse = await fetch(upstreamUrl, { method: "POST", headers: forwardHeaders, body: JSON.stringify(forwardBody), signal: AbortSignal.timeout(120_000) });
+    const upstreamResponse = stream
+      ? await fetch(upstreamUrl, { method: "POST", headers: forwardHeaders, body: JSON.stringify(forwardBody) })
+      : await fetchWithRetry(upstreamUrl, { method: "POST", headers: forwardHeaders, body: JSON.stringify(forwardBody) });
 
     if (stream) {
       res.status(upstreamResponse.status);
