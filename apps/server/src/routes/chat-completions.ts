@@ -37,7 +37,7 @@ chatCompletionsRouter.post("/v1/chat/completions", async (req, res) => {
   const needsTranslation = preResolve.provider?.format === "claude";
   let translatedRequest: Record<string, unknown> | undefined;
   if (needsTranslation) {
-    translatedRequest = openaiToClaudeRequest(preResolve.actualModel, body, stream) as unknown as Record<string, unknown>;
+    translatedRequest = openaiToClaudeRequest(preResolve.actualModel, body, stream, preResolve.provider?.defaultMaxTokens) as unknown as Record<string, unknown>;
   }
 
   const recordBody = config.modelOverride.trim()

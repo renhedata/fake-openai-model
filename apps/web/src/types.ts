@@ -25,6 +25,7 @@ export type Provider = {
   authStyle: AuthStyle;
   enabled: boolean;
   models: string[];
+  defaultMaxTokens?: number;
   createdAt: string;
 };
 

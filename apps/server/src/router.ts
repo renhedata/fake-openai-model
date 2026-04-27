@@ -20,7 +20,8 @@ export const providerSchema = z.object({
   format: z.enum(["openai", "claude", "gemini", "ollama"]).default("openai"),
   authStyle: z.enum(["bearer", "x-api-key"]).default("bearer"),
   enabled: z.boolean().default(true),
-  models: z.array(z.string()).default([])
+  models: z.array(z.string()).default([]),
+  defaultMaxTokens: z.number().int().positive().optional()
 });
 
 export const apiKeyCreateSchema = z.object({

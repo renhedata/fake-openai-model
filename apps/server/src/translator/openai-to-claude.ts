@@ -158,17 +158,17 @@ function convertOpenAIFunctionCallToToolChoice(functionCall: unknown): Record<st
   return undefined;
 }
 
-function adjustMaxTokens(body: Record<string, unknown>): number {
+function adjustMaxTokens(body: Record<string, unknown>, providerDefault?: number): number {
   const max = body.max_tokens ?? body.max_completion_tokens;
   if (typeof max === "number" && max > 0) return max;
-  return 4096;
+  return providerDefault ?? 4096;
 }
 
-export function openaiToClaudeRequest(model: string, body: Record<string, unknown>, stream: boolean): ClaudeRequest {
+export function openaiToClaudeRequest(model: string, body: Record<string, unknown>, stream: boolean, providerDefaultMaxTokens?: number): ClaudeRequest {
   const toolNameMap = new Map<string, string>();
   const result: ClaudeRequest = {
     model,
-    max_tokens: adjustMaxTokens(body),
+    max_tokens: adjustMaxTokens(body, providerDefaultMaxTokens),
     stream,
     messages: [],
   };

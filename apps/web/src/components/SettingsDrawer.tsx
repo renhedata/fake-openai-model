@@ -19,14 +19,15 @@ interface ProviderFormState {
   format: "openai" | "claude" | "gemini" | "ollama";
   authStyle: "bearer" | "x-api-key";
   models: string[];
+  defaultMaxTokens: string;
 }
 
 const emptyProviderForm = (): ProviderFormState => ({
-  id: "", name: "", providerType: "custom", baseUrl: "", apiKey: "", path: "/v1/chat/completions", apiType: "chat_completions", format: "openai", authStyle: "bearer", models: [],
+  id: "", name: "", providerType: "custom", baseUrl: "", apiKey: "", path: "/v1/chat/completions", apiType: "chat_completions", format: "openai", authStyle: "bearer", models: [], defaultMaxTokens: "",
 });
 
 const providerFormFromProvider = (p: Provider): ProviderFormState => ({
-  id: p.id, name: p.name, providerType: p.providerType, baseUrl: p.baseUrl, apiKey: p.apiKey, path: p.path, apiType: p.apiType, format: p.format, authStyle: p.authStyle, models: p.models ?? [],
+  id: p.id, name: p.name, providerType: p.providerType, baseUrl: p.baseUrl, apiKey: p.apiKey, path: p.path, apiType: p.apiType, format: p.format, authStyle: p.authStyle, models: p.models ?? [], defaultMaxTokens: p.defaultMaxTokens != null ? String(p.defaultMaxTokens) : "",
 });
 
 export const SettingsDrawer = memo(function SettingsDrawer({
@@ -153,6 +154,7 @@ export const SettingsDrawer = memo(function SettingsDrawer({
       format: providerForm.format,
       authStyle: providerForm.authStyle,
       models: providerForm.models ?? [],
+      ...(providerForm.defaultMaxTokens.trim() ? { defaultMaxTokens: parseInt(providerForm.defaultMaxTokens, 10) } : {}),
     };
     if (editingProviderId) {
       onUpdateProvider(editingProviderId, payload);
@@ -389,6 +391,20 @@ export const SettingsDrawer = memo(function SettingsDrawer({
                         <span className={`rounded px-1 py-0 text-[9px] ${providerForm.format === 'claude' ? 'bg-purple-500/10 text-purple-500/70' : 'bg-base-content/5 text-base-content/30'}`}>{providerForm.format}</span>
                         <span className={`rounded px-1 py-0 text-[9px] ${providerForm.authStyle === 'x-api-key' ? 'bg-orange-500/10 text-orange-500/70' : 'bg-base-content/5 text-base-content/30'}`}>{providerForm.authStyle}</span>
                       </div>
+                    </div>
+                  )}
+
+                  {providerForm.format === "claude" && (
+                    <div>
+                      <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-base-content/40">默认 Max Tokens（留空则用 4096）</label>
+                      <input
+                        className="input input-bordered input-sm w-full bg-base-100 font-mono text-xs"
+                        type="number"
+                        min={1}
+                        value={providerForm.defaultMaxTokens}
+                        onChange={(e) => setProviderForm((p) => ({ ...p, defaultMaxTokens: e.target.value }))}
+                        placeholder="4096"
+                      />
                     </div>
                   )}
 

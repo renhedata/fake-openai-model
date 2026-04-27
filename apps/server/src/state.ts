@@ -29,6 +29,7 @@ export type Provider = {
   authStyle: AuthStyle;
   enabled: boolean;
   models: string[];
+  defaultMaxTokens?: number;
   createdAt: string;
 };
 
@@ -320,6 +321,14 @@ const migrations: Migration[] = [
         database.exec(`ALTER TABLE exchanges ADD COLUMN agent_type TEXT;`);
       } catch { /* already exists */ }
     }
+  },
+  {
+    version: 9,
+    up: (database) => {
+      try {
+        database.exec(`ALTER TABLE providers ADD COLUMN default_max_tokens INTEGER;`);
+      } catch { /* already exists */ }
+    }
   }
 ];
 
@@ -447,6 +456,7 @@ const mapProviderRow = (row: Record<string, unknown>): Provider => {
     authStyle: (typeof row.auth_style === "string" ? row.auth_style : "bearer") as AuthStyle,
     enabled: row.enabled === 1 || row.enabled === true,
     models,
+    defaultMaxTokens: typeof row.default_max_tokens === "number" ? row.default_max_tokens : undefined,
     createdAt: String(row.created_at)
   };
 };
@@ -835,8 +845,8 @@ export const getProviderById = (id: string): Provider | null => {
 
 export const setProvider = (provider: Provider): Provider => {
   db.prepare(
-    `INSERT INTO providers (id, name, provider_type, base_url, api_key, path, api_type, format, auth_style, enabled, models, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO providers (id, name, provider_type, base_url, api_key, path, api_type, format, auth_style, enabled, models, default_max_tokens, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
        name = excluded.name,
        provider_type = excluded.provider_type,
@@ -847,7 +857,8 @@ export const setProvider = (provider: Provider): Provider => {
        format = excluded.format,
        auth_style = excluded.auth_style,
        enabled = excluded.enabled,
-       models = excluded.models`
+       models = excluded.models,
+       default_max_tokens = excluded.default_max_tokens`
   ).run(
     provider.id,
     provider.name,
@@ -860,6 +871,7 @@ export const setProvider = (provider: Provider): Provider => {
     provider.authStyle,
     provider.enabled ? 1 : 0,
     JSON.stringify(provider.models ?? []),
+    provider.defaultMaxTokens ?? null,
     provider.createdAt
   );
   // Sync provider.models into global models table
