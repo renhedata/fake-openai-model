@@ -1,10 +1,10 @@
 import { memo, useEffect, useMemo, useState } from "react";
 import {
   Activity, CheckCircle2, Copy, Key, Loader2,
-  Plus, RefreshCw, Settings2, Trash2, X, XCircle, Server,
+  Pencil, Plus, RefreshCw, Settings2, Trash2, X, XCircle, Server,
 } from "lucide-react";
 import type { ModelRecord, Provider, ApiKey, UpstreamTestResult } from "../types";
-import { BUILTIN_PROVIDERS, defaultProviderTemplates, generateProviderId } from "../utils";
+import { BUILTIN_PROVIDERS, defaultProviderTemplates, generateProviderId, resolveUpstreamUrl } from "../utils";
 
 type TabKey = "providers" | "apikeys";
 
@@ -51,6 +51,7 @@ export const SettingsDrawer = memo(function SettingsDrawer({
   apiKeyError,
   apiKeySuccess,
   onCreateApiKey,
+  onUpdateApiKey,
   onDeleteApiKey,
   onClose,
 }: {
@@ -74,6 +75,7 @@ export const SettingsDrawer = memo(function SettingsDrawer({
   apiKeyError: string;
   apiKeySuccess: string;
   onCreateApiKey: (name: string, allowedModels: string[] | null) => void;
+  onUpdateApiKey: (id: string, allowedModels: string[] | null) => void;
   onDeleteApiKey: (id: string) => void;
   onClose: () => void;
 }) {
@@ -103,6 +105,10 @@ export const SettingsDrawer = memo(function SettingsDrawer({
   // API Key form state
   const [apiKeyName, setApiKeyName] = useState("");
   const [apiKeyAllowedModels, setApiKeyAllowedModels] = useState("");
+
+  // API Key edit state
+  const [editingKeyId, setEditingKeyId] = useState<string | null>(null);
+  const [editingKeyModels, setEditingKeyModels] = useState("");
 
   // Copy key state
   const [copiedKeyId, setCopiedKeyId] = useState<string | null>(null);
@@ -385,7 +391,7 @@ export const SettingsDrawer = memo(function SettingsDrawer({
 
                   {providerForm.providerType !== "custom" && (
                     <div className="rounded bg-base-200/50 px-2 py-1.5 space-y-0.5">
-                      <p className="font-mono text-[10px] text-base-content/40 truncate">{providerForm.baseUrl}{providerForm.path || ""}</p>
+                      <p className="font-mono text-[10px] text-base-content/40 truncate">{resolveUpstreamUrl(providerForm.baseUrl, providerForm.path || "")}</p>
                       <div className="flex items-center gap-1.5 text-[10px] text-base-content/30">
                         <span>API: {providerForm.apiType === "chat_completions" ? "Chat" : "Responses"}</span>
                         <span className={`rounded px-1 py-0 text-[9px] ${providerForm.format === 'claude' ? 'bg-purple-500/10 text-purple-500/70' : 'bg-base-content/5 text-base-content/30'}`}>{providerForm.format}</span>
@@ -451,7 +457,7 @@ export const SettingsDrawer = memo(function SettingsDrawer({
                               </span>
                             )}
                           </div>
-                          <p className="mt-0.5 font-mono text-[10px] text-base-content/40 truncate">{p.baseUrl}{p.path || ""}</p>
+                          <p className="mt-0.5 font-mono text-[10px] text-base-content/40 truncate">{resolveUpstreamUrl(p.baseUrl, p.path || "")}</p>
                         </div>
                         <div className="flex items-center gap-1 shrink-0">
                           <button
@@ -689,15 +695,66 @@ export const SettingsDrawer = memo(function SettingsDrawer({
                             </div>
                           )}
                         </div>
-                        <button
-                          type="button"
-                          className="btn btn-ghost btn-xs btn-circle h-6 w-6 min-h-0 text-error/50 hover:text-error shrink-0"
-                          onClick={() => onDeleteApiKey(k.id)}
-                          title="删除"
-                        >
-                          <Trash2 size={11} />
-                        </button>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-xs btn-circle h-6 w-6 min-h-0 text-base-content/30 hover:text-primary"
+                            onClick={() => {
+                              setEditingKeyId(k.id);
+                              setEditingKeyModels(k.allowedModels ? k.allowedModels.join(", ") : "");
+                            }}
+                            title="编辑模型权限"
+                          >
+                            <Pencil size={11} />
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-xs btn-circle h-6 w-6 min-h-0 text-error/50 hover:text-error"
+                            onClick={() => onDeleteApiKey(k.id)}
+                            title="删除"
+                          >
+                            <Trash2 size={11} />
+                          </button>
+                        </div>
                       </div>
+                      {editingKeyId === k.id && (
+                        <div className="pt-1 space-y-2 border-t border-base-content/10 mt-1">
+                          <label className="block text-[10px] font-semibold uppercase tracking-wider text-base-content/40">
+                            允许模型 <span className="font-normal text-base-content/25">（留空表示全部）</span>
+                          </label>
+                          <input
+                            className="input input-bordered input-sm w-full bg-base-100 text-xs"
+                            value={editingKeyModels}
+                            onChange={(e) => setEditingKeyModels(e.target.value)}
+                            placeholder="kimi-k2.5, MiniMax-M2, ..."
+                          />
+                          <p className="text-[9px] text-base-content/25">用逗号分隔多个模型 ID</p>
+                          <div className="flex justify-end gap-1.5">
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-xs h-6 min-h-0 text-xs"
+                              onClick={() => setEditingKeyId(null)}
+                            >
+                              取消
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-primary btn-xs h-6 min-h-0 text-xs"
+                              disabled={apiKeyLoading}
+                              onClick={() => {
+                                const models = editingKeyModels.trim()
+                                  ? editingKeyModels.split(",").map((s) => s.trim()).filter(Boolean)
+                                  : null;
+                                onUpdateApiKey(k.id, models);
+                                setEditingKeyId(null);
+                              }}
+                            >
+                              {apiKeyLoading ? <Loader2 size={11} className="animate-spin" /> : null}
+                              保存
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   ))
                 )}

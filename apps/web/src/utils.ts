@@ -5,6 +5,19 @@ import type { ApiType, ProxyConfig, DashboardMeta, ChatMessage, Provider, ApiKey
 export const PAGE_SIZE = 50;
 export const RENDER_BATCH_SIZE = 30;
 
+export const resolveUpstreamUrl = (baseUrl: string, path?: string): string => {
+  const trimmedBase = baseUrl.trim();
+  const trimmedPath = (path ?? "").trim();
+  if (trimmedPath.startsWith("http://") || trimmedPath.startsWith("https://")) return trimmedPath;
+  if (!trimmedBase) return trimmedPath;
+  if (!trimmedPath || trimmedPath === "/") return trimmedBase;
+  try {
+    return new URL(trimmedPath, trimmedBase.endsWith("/") ? trimmedBase : trimmedBase + "/").toString();
+  } catch {
+    return trimmedBase + trimmedPath;
+  }
+};
+
 export const apiTypeToPath = (t: ApiType) =>
   t === "responses" ? "/v1/responses" : "/v1/chat/completions";
 

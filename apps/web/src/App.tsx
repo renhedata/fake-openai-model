@@ -270,6 +270,22 @@ export const App = () => {
     finally { setApiKeyLoading(false); }
   }, [readErrorMessage]);
 
+  const onUpdateApiKey = useCallback(async (id: string, allowedModels: string[] | null) => {
+    setApiKeyLoading(true); setApiKeyError(""); setApiKeySuccess("");
+    try {
+      const r = await fetch(`/proxy/api-keys/${id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ allowedModels }),
+      });
+      if (!r.ok) throw new Error(await readErrorMessage(r));
+      const updated = (await r.json()) as ApiKey;
+      setDashboardMeta((prev) => ({ ...prev, apiKeys: prev.apiKeys.map((k) => (k.id === id ? updated : k)) }));
+      setApiKeySuccess("已更新模型权限");
+    } catch (e) { setApiKeyError(e instanceof Error ? e.message : "更新失败"); }
+    finally { setApiKeyLoading(false); }
+  }, [readErrorMessage]);
+
   const onDeleteApiKey = useCallback(async (id: string) => {
     if (!window.confirm("确定要删除此密钥吗？")) return;
     setApiKeyLoading(true); setApiKeyError(""); setApiKeySuccess("");
@@ -692,6 +708,7 @@ export const App = () => {
         apiKeyError={apiKeyError}
         apiKeySuccess={apiKeySuccess}
         onCreateApiKey={onCreateApiKey}
+        onUpdateApiKey={onUpdateApiKey}
         onDeleteApiKey={onDeleteApiKey}
       />
     </div>
