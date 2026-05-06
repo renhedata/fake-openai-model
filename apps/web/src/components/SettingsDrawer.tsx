@@ -3,7 +3,7 @@ import {
   Activity, CheckCircle2, Copy, Key, Loader2,
   Pencil, Plus, RefreshCw, Settings2, Trash2, X, XCircle, Server,
 } from "lucide-react";
-import type { ModelRecord, Provider, ApiKey, UpstreamTestResult } from "../types";
+import type { ModelRecord, Provider, ApiKey, UpstreamTestResult, ProviderFormat } from "../types";
 import { BUILTIN_PROVIDERS, defaultProviderTemplates, generateProviderId, resolveUpstreamUrl } from "../utils";
 
 type TabKey = "providers" | "apikeys";
@@ -146,7 +146,7 @@ export const SettingsDrawer = memo(function SettingsDrawer({
     if (!name || (isCustom && !baseUrl)) return;
     const id = providerForm.id.trim() || generateProviderId(name);
     // Derive format from apiType: messages → claude, otherwise → openai
-    const format = providerForm.apiType === "messages" ? "claude" : "openai";
+    const format = (providerForm.apiType === "messages" ? "claude" : "openai") as ProviderFormat;
     const payload = {
       id,
       name,

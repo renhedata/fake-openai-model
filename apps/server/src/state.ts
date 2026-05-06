@@ -23,7 +23,7 @@ export type Provider = {
   providerType: string;
   baseUrl: string;
   apiKey: string;
-  path: string;
+  path?: string;
   apiType: ApiType;
   format: ProviderFormat;
   authStyle: AuthStyle;
