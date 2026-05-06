@@ -51,6 +51,7 @@ export const App = () => {
   const [totalCount, setTotalCount] = useState(0);
   const [loadingMore, setLoadingMore] = useState(false);
   const [initialLoaded, setInitialLoaded] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
 
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -85,12 +86,17 @@ export const App = () => {
   }, [dateFrom, dateTo, statusFilter, searchQuery, apiKeyFilter, agentTypeFilter]);
 
   const loadInitialPage = useCallback(async () => {
-    const result = await fetchExchanges();
-    if (result) {
-      setPaginatedItems(result.items);
-      setNextCursor(result.nextCursor);
-      setTotalCount(result.total);
-      setInitialLoaded(true);
+    setIsLoading(true);
+    try {
+      const result = await fetchExchanges();
+      if (result) {
+        setPaginatedItems(result.items);
+        setNextCursor(result.nextCursor);
+        setTotalCount(result.total);
+        setInitialLoaded(true);
+      }
+    } finally {
+      setIsLoading(false);
     }
   }, [fetchExchanges]);
 
@@ -661,7 +667,7 @@ export const App = () => {
           </>
         )}
         <span className="text-[10px] text-base-content/25 tabular-nums ml-auto">
-          {initialLoaded ? `${filteredItems.length} / ${totalCount} 条` : "加载中…"}
+          {isLoading ? <Loader2 size={10} className="inline animate-spin" /> : initialLoaded ? `${filteredItems.length} / ${totalCount} 条` : ""}
         </span>
       </div>
 
@@ -670,7 +676,12 @@ export const App = () => {
         <div className={`flex flex-col overflow-hidden transition-all duration-200 ${selectedItem ? "w-[360px] min-w-[240px] shrink-0" : "flex-1"}`}>
           <div className="flex-1 overflow-y-auto border-r border-base-content/5">
             <div className="space-y-1 p-2">
-              {filteredItems.length === 0 ? (
+              {isLoading ? (
+                <div className="flex flex-col items-center justify-center py-16 text-base-content/25">
+                  <Loader2 size={28} className="mb-2 animate-spin opacity-30" />
+                  <p className="text-sm">加载中…</p>
+                </div>
+              ) : filteredItems.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-16 text-base-content/25 animate-fade-slide-in">
                   <Radio size={28} className="mb-2 opacity-30" />
                   <p className="text-sm">{searchQuery || statusFilter !== "all" || hasDateFilter || apiKeyFilter || agentTypeFilter !== "all" ? "无匹配记录" : "等待请求中…"}</p>

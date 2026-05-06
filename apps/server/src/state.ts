@@ -387,6 +387,33 @@ const migrations: Migration[] = [
         database.exec(`ALTER TABLE exchanges ADD COLUMN completion_tokens INTEGER DEFAULT 0;`);
       } catch { /* already exists */ }
     }
+  },
+  {
+    version: 15,
+    up: (database) => {
+      database.exec(`
+        CREATE VIRTUAL TABLE IF NOT EXISTS exchanges_fts USING fts5(
+          id UNINDEXED,
+          prompt,
+          model,
+          error_message
+        );
+        INSERT INTO exchanges_fts(id, prompt, model, error_message)
+          SELECT id, prompt, model, COALESCE(error_message, '') FROM exchanges;
+        CREATE TRIGGER IF NOT EXISTS exchanges_fts_ai AFTER INSERT ON exchanges BEGIN
+          INSERT INTO exchanges_fts(id, prompt, model, error_message)
+          VALUES (new.id, new.prompt, new.model, COALESCE(new.error_message, ''));
+        END;
+        CREATE TRIGGER IF NOT EXISTS exchanges_fts_ad AFTER DELETE ON exchanges BEGIN
+          DELETE FROM exchanges_fts WHERE id = old.id;
+        END;
+        CREATE TRIGGER IF NOT EXISTS exchanges_fts_au AFTER UPDATE ON exchanges BEGIN
+          DELETE FROM exchanges_fts WHERE id = old.id;
+          INSERT INTO exchanges_fts(id, prompt, model, error_message)
+          VALUES (new.id, new.prompt, new.model, COALESCE(new.error_message, ''));
+        END;
+      `);
+    }
   }
 ];
 
@@ -443,6 +470,13 @@ if (!existingModels.count) {
     insertModel.run(item.id, item.object, item.created, item.owned_by);
   }
 }
+
+// Convert a user search string into a safe FTS5 phrase query
+const toFtsQuery = (search: string): string => {
+  // Remove chars that have special meaning in FTS5 phrase syntax
+  const cleaned = search.replace(/["""*^()[\]{}!]/g, ' ').trim();
+  return cleaned ? `"${cleaned}"` : '""';
+};
 
 // Cached stats — invalidated on every write that changes exchange counts or tokens
 let statsCache: ExchangeStats | null = null;
@@ -687,33 +721,37 @@ export const getExchangesPaginated = (params: {
     const sepIdx = params.cursor.indexOf("||");
     const cursorAt = sepIdx >= 0 ? params.cursor.slice(0, sepIdx) : params.cursor;
     const cursorId = sepIdx >= 0 ? params.cursor.slice(sepIdx + 2) : "";
-    conditions.push("(created_at < ? OR (created_at = ? AND id < ?))");
+    conditions.push("(e.created_at < ? OR (e.created_at = ? AND e.id < ?))");
     args.push(cursorAt, cursorAt, cursorId);
   }
   if (params.dateFrom) {
-    conditions.push("created_at >= ?");
+    conditions.push("e.created_at >= ?");
     args.push(params.dateFrom);
   }
   if (params.dateTo) {
-    conditions.push("created_at <= ?");
+    conditions.push("e.created_at <= ?");
     args.push(params.dateTo);
   }
   if (params.status && params.status !== "all") {
-    conditions.push("response_status = ?");
+    conditions.push("e.response_status = ?");
     args.push(params.status);
   }
-  if (params.search) {
-    conditions.push("(prompt LIKE ? OR model LIKE ? OR error_message LIKE ?)");
-    const like = `%${params.search}%`;
-    args.push(like, like, like);
-  }
   if (params.apiKeyId) {
-    conditions.push("api_key_id = ?");
+    conditions.push("e.api_key_id = ?");
     args.push(params.apiKeyId);
   }
   if (params.agentType) {
-    conditions.push("agent_type = ?");
+    conditions.push("e.agent_type = ?");
     args.push(params.agentType);
+  }
+
+  // FTS search is added last so cursor args (first 3) can still be sliced for the count query
+  const ftsQuery = params.search ? toFtsQuery(params.search) : "";
+  const useFts = !!ftsQuery && ftsQuery !== '""';
+  const joinClause = useFts ? "JOIN exchanges_fts ON exchanges_fts.id = e.id" : "";
+  if (useFts) {
+    conditions.push("exchanges_fts MATCH ?");
+    args.push(ftsQuery);
   }
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
@@ -726,13 +764,16 @@ export const getExchangesPaginated = (params: {
   });
   const countArgs = params.cursor ? args.slice(3) : [...args];
   const countWhere = countConditions.length > 0 ? `WHERE ${countConditions.join(" AND ")}` : "";
-  const countRow = db.prepare(`SELECT COUNT(*) AS count FROM exchanges ${countWhere}`).get(...countArgs) as { count: number };
+  const countRow = db.prepare(
+    `SELECT COUNT(*) AS count FROM exchanges e ${joinClause} ${countWhere}`
+  ).get(...countArgs) as { count: number };
   const total = Number(countRow.count) || 0;
 
   const rows = db.prepare(
-    `SELECT id, mode, model, prompt, prompt_tokens, completion_tokens, created_at, completed_at,
-     response_status, error_message, upstream_url, upstream_status_code, duration_ms,
-     api_key_id, api_key_name, agent_type FROM exchanges ${where} ORDER BY created_at DESC, id DESC LIMIT ?`
+    `SELECT e.id, e.mode, e.model, e.prompt, e.prompt_tokens, e.completion_tokens, e.created_at, e.completed_at,
+     e.response_status, e.error_message, e.upstream_url, e.upstream_status_code, e.duration_ms,
+     e.api_key_id, e.api_key_name, e.agent_type FROM exchanges e ${joinClause} ${where}
+     ORDER BY e.created_at DESC, e.id DESC LIMIT ?`
   ).all(...args, limit + 1) as Array<Record<string, unknown>>;
 
   const hasMore = rows.length > limit;
