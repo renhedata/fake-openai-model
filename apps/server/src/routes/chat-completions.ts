@@ -76,12 +76,7 @@ chatCompletionsRouter.post("/v1/chat/completions", async (req, res) => {
   // --- Resolve provider by model, fallback to legacy proxy_config ---
   const { provider, actualModel, useLegacy } = resolveProviderForModel(model);
   const targetBaseUrl = provider?.baseUrl ?? config.baseUrl;
-  // Claude-format providers use the Anthropic Messages API (/v1/messages).
-  // When translating, ignore the OpenAI default path (/v1/chat/completions) and use /v1/messages.
-  const OPENAI_DEFAULT_PATH = "/v1/chat/completions";
-  const targetPath = needsTranslation
-    ? (provider?.path && provider.path !== OPENAI_DEFAULT_PATH ? provider.path : "/v1/messages")
-    : (provider?.path ?? config.path);
+  const targetPath = provider?.path ?? config.path;
   const targetApiKey = provider?.apiKey ?? config.apiKey;
 
   const startedAt = Date.now();

@@ -351,6 +351,16 @@ const migrations: Migration[] = [
         `UPDATE providers SET path = '/v1/messages' WHERE format = 'claude' AND path = '/v1/chat/completions'`
       ).run();
     }
+  },
+  {
+    version: 12,
+    up: (database) => {
+      // Migration v11 incorrectly changed kimi's path to '/v1/messages'.
+      // Kimi exposes the Anthropic format at '/v1/chat/completions', not '/v1/messages'.
+      database.prepare(
+        `UPDATE providers SET path = '/v1/chat/completions' WHERE id = 'kimi' AND path = '/v1/messages'`
+      ).run();
+    }
   }
 ];
 
