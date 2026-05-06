@@ -667,7 +667,7 @@ export const App = () => {
           </>
         )}
         <span className="text-[10px] text-base-content/25 tabular-nums ml-auto">
-          {isLoading ? <Loader2 size={10} className="inline animate-spin" /> : initialLoaded ? `${filteredItems.length} / ${totalCount} 条` : ""}
+          {initialLoaded && !isLoading ? `${filteredItems.length} / ${totalCount} 条` : ""}
         </span>
       </div>
 
