@@ -86,6 +86,11 @@ export const App = () => {
   }, [dateFrom, dateTo, statusFilter, searchQuery, apiKeyFilter, agentTypeFilter]);
 
   const loadInitialPage = useCallback(async () => {
+    // Clear stale cursor/items immediately so the sentinel unmounts and
+    // IntersectionObserver cannot fire loadMore with the old cursor while
+    // the new filter request is in flight.
+    setPaginatedItems([]);
+    setNextCursor(null);
     setIsLoading(true);
     try {
       const result = await fetchExchanges();
