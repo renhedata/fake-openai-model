@@ -115,6 +115,42 @@ chatCompletionsRouter.post("/v1/chat/completions", async (req, res) => {
     } else if (provider && actualModel !== model) {
       forwardBody.model = actualModel;
     }
+
+    // Sanitize tools for passthrough: some upstreams (e.g. strict OpenAI-compat APIs)
+    // reject requests containing non-function tool types (e.g. bash/computer) or tools
+    // with empty name / missing parameters, returning errors like "function name or
+    // parameters is empty (2013)". Normalize to a valid OpenAI function tool list.
+    if (Array.isArray(forwardBody.tools)) {
+      const sanitized = (forwardBody.tools as Array<Record<string, unknown>>)
+        .filter((t) => {
+          // Keep only function-typed tools with a non-empty name
+          const toolType = t.type as string | undefined;
+          if (toolType && toolType !== "function") return false;
+          const fn = t.function as Record<string, unknown> | undefined;
+          const name = fn?.name ?? t.name;
+          return typeof name === "string" && name.trim() !== "";
+        })
+        .map((t) => {
+          const fn = (t.function ?? t) as Record<string, unknown>;
+          return {
+            type: "function",
+            function: {
+              name: fn.name as string,
+              ...(fn.description !== undefined ? { description: fn.description } : {}),
+              parameters: (fn.parameters as Record<string, unknown>) ??
+                (fn.input_schema as Record<string, unknown>) ??
+                { type: "object", properties: {}, required: [] },
+            },
+          };
+        });
+      if (sanitized.length > 0) {
+        forwardBody.tools = sanitized;
+      } else {
+        // No valid tools remain — drop the field to avoid upstream errors
+        delete forwardBody.tools;
+        delete forwardBody.tool_choice;
+      }
+    }
   }
 
   const forwardHeaders = buildForwardHeaders(req, targetApiKey, authStyle);
