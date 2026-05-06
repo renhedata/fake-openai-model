@@ -240,7 +240,7 @@ chatCompletionsRouter.post("/v1/chat/completions", async (req, res) => {
       // Passthrough streaming: auto-detect upstream format.
       // Some providers return Anthropic SSE even when sent OpenAI requests — translate to OAI SSE if so.
       let lineBuffer2 = "";
-      let streamFormat: "oai" | "anthropic" | "unknown" = "unknown";
+      let streamFormat = "unknown";
       const autoTranslateState = createTranslationState(actualModel);
       const oaiExtractor = createOaiSseExtractor();
 
