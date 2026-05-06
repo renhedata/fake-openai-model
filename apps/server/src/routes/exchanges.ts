@@ -1,6 +1,6 @@
 import { Router } from "express";
 import {
-  getExchangesPaginated,
+  getExchangesPaginatedAsync,
   getExchangeById,
   deleteExchanges,
   deleteAllExchanges,
@@ -8,7 +8,7 @@ import {
 
 export const exchangesRouter = Router();
 
-exchangesRouter.get("/", (req, res) => {
+exchangesRouter.get("/", async (req, res) => {
   const cursor = typeof req.query.cursor === "string" ? req.query.cursor : undefined;
   const limit = typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
   const dateFrom = typeof req.query.dateFrom === "string" ? req.query.dateFrom : undefined;
@@ -17,7 +17,7 @@ exchangesRouter.get("/", (req, res) => {
   const search = typeof req.query.search === "string" ? req.query.search : undefined;
   const apiKeyId = typeof req.query.apiKeyId === "string" ? req.query.apiKeyId : undefined;
   const agentType = typeof req.query.agentType === "string" ? req.query.agentType : undefined;
-  const result = getExchangesPaginated({ cursor, limit, dateFrom, dateTo, status, search, apiKeyId, agentType });
+  const result = await getExchangesPaginatedAsync({ cursor, limit, dateFrom, dateTo, status, search, apiKeyId, agentType });
   res.json(result);
 });
 

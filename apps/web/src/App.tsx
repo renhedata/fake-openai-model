@@ -70,7 +70,9 @@ export const App = () => {
     localStorage.setItem("theme", next);
   }, [isDark]);
 
-  const fetchExchanges = useCallback(async (cursor?: string) => {
+  const loadAbortRef = useRef<AbortController | null>(null);
+
+  const fetchExchanges = useCallback(async (cursor?: string, signal?: AbortSignal) => {
     const params = new URLSearchParams();
     params.set("limit", String(PAGE_SIZE));
     if (cursor) params.set("cursor", cursor);
@@ -80,12 +82,17 @@ export const App = () => {
     if (apiKeyFilter) params.set("apiKeyId", apiKeyFilter);
     if (agentTypeFilter !== "all") params.set("agentType", agentTypeFilter);
     if (searchQuery.trim()) params.set("search", searchQuery.trim());
-    const r = await fetch(`/exchanges?${params.toString()}`);
+    const r = await fetch(`/exchanges?${params.toString()}`, { signal });
     if (!r.ok) return null;
     return (await r.json()) as PaginatedResult;
   }, [dateFrom, dateTo, statusFilter, searchQuery, apiKeyFilter, agentTypeFilter]);
 
   const loadInitialPage = useCallback(async () => {
+    // Abort any in-flight request before starting a new one
+    loadAbortRef.current?.abort();
+    const controller = new AbortController();
+    loadAbortRef.current = controller;
+
     // Clear stale cursor/items immediately so the sentinel unmounts and
     // IntersectionObserver cannot fire loadMore with the old cursor while
     // the new filter request is in flight.
@@ -93,15 +100,17 @@ export const App = () => {
     setNextCursor(null);
     setIsLoading(true);
     try {
-      const result = await fetchExchanges();
+      const result = await fetchExchanges(undefined, controller.signal);
       if (result) {
         setPaginatedItems(result.items);
         setNextCursor(result.nextCursor);
         setTotalCount(result.total);
         setInitialLoaded(true);
       }
+    } catch (e) {
+      if (e instanceof Error && e.name === "AbortError") return;
     } finally {
-      setIsLoading(false);
+      if (!controller.signal.aborted) setIsLoading(false);
     }
   }, [fetchExchanges]);
 
@@ -111,7 +120,7 @@ export const App = () => {
   useEffect(() => { loadInitialPageRef.current = loadInitialPage; }, [loadInitialPage]);
 
   useEffect(() => {
-    const t = setTimeout(() => setSearchQuery(searchInput), 300);
+    const t = setTimeout(() => setSearchQuery(searchInput), 600);
     return () => clearTimeout(t);
   }, [searchInput]);
 

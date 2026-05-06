@@ -1,6 +1,8 @@
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { Worker } from "node:worker_threads";
 
 export type ProxyMode = "forward";
 export type ApiType = "chat_completions" | "messages" | "responses";
@@ -116,6 +118,38 @@ const proxyConfig: ProxyConfig = {
 
 const sqlitePath = resolve(process.cwd(), process.env.SQLITE_PATH ?? "data/fake-model.db");
 mkdirSync(dirname(sqlitePath), { recursive: true });
+
+// Worker thread for non-blocking reads — resolves .js (prod) or .ts (Bun dev) path
+const __stateDir = dirname(fileURLToPath(import.meta.url));
+const _workerJs = join(__stateDir, "workers/db-query-worker.js");
+const _workerTs = join(__stateDir, "workers/db-query-worker.ts");
+const workerScriptPath = existsSync(_workerJs) ? _workerJs : _workerTs;
+
+let _readWorker: Worker | null = null;
+const _pending = new Map<number, { resolve: (r: PaginatedResult) => void; reject: (e: Error) => void }>();
+let _queryId = 0;
+
+const getReadWorker = (): Worker => {
+  if (_readWorker) return _readWorker;
+  _readWorker = new Worker(workerScriptPath, { workerData: { sqlitePath } });
+  _readWorker.on(
+    "message",
+    ({ id, result, error }: { id: number; result?: PaginatedResult; error?: string }) => {
+      const pending = _pending.get(id);
+      if (!pending) return;
+      _pending.delete(id);
+      if (error) pending.reject(new Error(error));
+      else pending.resolve(result!);
+    }
+  );
+  _readWorker.on("error", (err) => {
+    for (const [, p] of _pending) p.reject(err instanceof Error ? err : new Error(String(err)));
+    _pending.clear();
+    _readWorker = null;
+  });
+  _readWorker.on("exit", () => { _readWorker = null; });
+  return _readWorker;
+};
 type PreparedStatement = {
   run: (...args: unknown[]) => unknown;
   get: (...args: unknown[]) => unknown;
@@ -801,6 +835,20 @@ export const getExchangesPaginated = (params: {
 
   return { items, nextCursor, total };
 };
+
+export const getExchangesPaginatedAsync = (
+  params: Parameters<typeof getExchangesPaginated>[0]
+): Promise<PaginatedResult> =>
+  new Promise((resolve, reject) => {
+    const id = ++_queryId;
+    _pending.set(id, { resolve, reject });
+    try {
+      getReadWorker().postMessage({ id, params });
+    } catch (err) {
+      _pending.delete(id);
+      reject(err instanceof Error ? err : new Error(String(err)));
+    }
+  });
 
 export const getExchangeStats = (): ExchangeStats => {
   if (statsCache) return statsCache;
