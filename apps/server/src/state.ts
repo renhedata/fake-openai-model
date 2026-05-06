@@ -56,7 +56,8 @@ export type ExchangeRecord = {
   model: string;
   prompt: string;
   promptTokens: number;
-  requestBody: unknown;
+  completionTokens?: number;
+  requestBody?: unknown;
   translatedRequestBody?: unknown;
   createdAt: string;
   completedAt?: string;
@@ -378,6 +379,14 @@ const migrations: Migration[] = [
         ).run(pid);
       }
     }
+  },
+  {
+    version: 14,
+    up: (database) => {
+      try {
+        database.exec(`ALTER TABLE exchanges ADD COLUMN completion_tokens INTEGER DEFAULT 0;`);
+      } catch { /* already exists */ }
+    }
   }
 ];
 
@@ -435,6 +444,25 @@ if (!existingModels.count) {
   }
 }
 
+// Cached stats — invalidated on every write that changes exchange counts or tokens
+let statsCache: ExchangeStats | null = null;
+const invalidateStats = () => { statsCache = null; };
+
+// Extract completion token count from a stored responseBody object without full JSON re-parsing
+const extractCompletionTokens = (responseBody: unknown): number => {
+  if (!responseBody || typeof responseBody !== "object") return 0;
+  const r = responseBody as Record<string, unknown>;
+  const raw = (typeof r.rawResponse === "object" && r.rawResponse !== null ? r.rawResponse : r) as Record<string, unknown>;
+  const usage = raw.usage as Record<string, unknown> | undefined;
+  if (usage) {
+    if (typeof usage.completion_tokens === "number") return usage.completion_tokens;
+    if (typeof usage.output_tokens === "number") return usage.output_tokens;
+  }
+  // Streaming stored: estimate from captured assistant text
+  const text = typeof r.assistant === "string" ? r.assistant : typeof r.content === "string" ? r.content : "";
+  return text ? Math.max(1, Math.ceil(text.length / 4)) : 0;
+};
+
 const parseJson = (value: string | null | undefined): unknown => {
   if (!value) {
     return undefined;
@@ -446,19 +474,22 @@ const parseJson = (value: string | null | undefined): unknown => {
   }
 };
 
-const mapExchangeRow = (row: Record<string, unknown>): ExchangeRecord => ({
+const mapExchangeRow = (row: Record<string, unknown>, full = false): ExchangeRecord => ({
   id: String(row.id),
   mode: "forward",
   model: String(row.model),
   prompt: String(row.prompt),
   promptTokens: Number(row.prompt_tokens) || 0,
-  requestBody: parseJson(typeof row.request_body === "string" ? row.request_body : undefined),
-  translatedRequestBody: parseJson(typeof row.translated_request_body === "string" ? row.translated_request_body : undefined),
+  completionTokens: typeof row.completion_tokens === "number" ? row.completion_tokens : undefined,
+  ...(full ? {
+    requestBody: parseJson(typeof row.request_body === "string" ? row.request_body : undefined),
+    translatedRequestBody: parseJson(typeof row.translated_request_body === "string" ? row.translated_request_body : undefined),
+    responseBody: parseJson(typeof row.response_body === "string" ? row.response_body : undefined),
+    translatedResponseBody: parseJson(typeof row.translated_response_body === "string" ? row.translated_response_body : undefined),
+  } : {}),
   createdAt: String(row.created_at),
   completedAt: typeof row.completed_at === "string" ? row.completed_at : undefined,
   responseStatus: row.response_status === "error" ? "error" : row.response_status === "success" ? "success" : "pending",
-  responseBody: parseJson(typeof row.response_body === "string" ? row.response_body : undefined),
-  translatedResponseBody: parseJson(typeof row.translated_response_body === "string" ? row.translated_response_body : undefined),
   errorMessage: typeof row.error_message === "string" ? row.error_message : undefined,
   upstreamUrl: typeof row.upstream_url === "string" ? row.upstream_url : undefined,
   upstreamStatusCode: typeof row.upstream_status_code === "number" ? row.upstream_status_code : undefined,
@@ -577,7 +608,7 @@ export const addExchange = (params: {
     record.apiKeyName ?? null,
     record.agentType ?? null
   );
-  // No longer delete old records — allow unlimited accumulation
+  invalidateStats();
   emit(record);
   return record;
 };
@@ -599,10 +630,11 @@ export const completeExchange = (
     return null;
   }
   const completedAt = new Date().toISOString();
+  const completionTokens = extractCompletionTokens(update.responseBody);
   db.prepare(
     `UPDATE exchanges
      SET response_status = ?, response_body = ?, translated_response_body = ?, error_message = ?, upstream_url = ?,
-         upstream_status_code = ?, duration_ms = ?, completed_at = ?
+         upstream_status_code = ?, duration_ms = ?, completed_at = ?, completion_tokens = ?
      WHERE id = ?`
   ).run(
     update.responseStatus,
@@ -613,9 +645,15 @@ export const completeExchange = (
     update.upstreamStatusCode ?? null,
     update.durationMs ?? null,
     completedAt,
+    completionTokens,
     id
   );
-  const targetRow = db.prepare("SELECT * FROM exchanges WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+  invalidateStats();
+  const targetRow = db.prepare(
+    `SELECT id, mode, model, prompt, prompt_tokens, completion_tokens, created_at, completed_at,
+     response_status, error_message, upstream_url, upstream_status_code, duration_ms,
+     api_key_id, api_key_name, agent_type FROM exchanges WHERE id = ?`
+  ).get(id) as Record<string, unknown> | undefined;
   if (!targetRow) {
     return null;
   }
@@ -692,11 +730,13 @@ export const getExchangesPaginated = (params: {
   const total = Number(countRow.count) || 0;
 
   const rows = db.prepare(
-    `SELECT * FROM exchanges ${where} ORDER BY created_at DESC, id DESC LIMIT ?`
+    `SELECT id, mode, model, prompt, prompt_tokens, completion_tokens, created_at, completed_at,
+     response_status, error_message, upstream_url, upstream_status_code, duration_ms,
+     api_key_id, api_key_name, agent_type FROM exchanges ${where} ORDER BY created_at DESC, id DESC LIMIT ?`
   ).all(...args, limit + 1) as Array<Record<string, unknown>>;
 
   const hasMore = rows.length > limit;
-  const items = (hasMore ? rows.slice(0, limit) : rows).map(mapExchangeRow);
+  const items = (hasMore ? rows.slice(0, limit) : rows).map((r) => mapExchangeRow(r));
   const lastItem = items[items.length - 1];
   const nextCursor = hasMore && lastItem ? `${lastItem.createdAt}||${lastItem.id}` : null;
 
@@ -704,6 +744,7 @@ export const getExchangesPaginated = (params: {
 };
 
 export const getExchangeStats = (): ExchangeStats => {
+  if (statsCache) return statsCache;
   const row = db
     .prepare(
       `SELECT
@@ -714,11 +755,12 @@ export const getExchangeStats = (): ExchangeStats => {
     )
     .get() as Record<string, unknown>;
 
-  return {
+  statsCache = {
     totalRequests: Number(row.total_requests) || 0,
     totalPromptTokens: Number(row.total_prompt_tokens) || 0,
     totalForwarded: Number(row.total_forwarded) || 0
   };
+  return statsCache;
 };
 
 export const getProxyConfig = (): ProxyConfig => {
@@ -856,10 +898,16 @@ export const deleteModel = (id: string): boolean => {
   return false;
 };
 
+export const getExchangeById = (id: string): ExchangeRecord | null => {
+  const row = db.prepare("SELECT * FROM exchanges WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+  return row ? mapExchangeRow(row, true) : null;
+};
+
 export const deleteExchanges = (ids: string[]) => {
   if (ids.length === 0) return 0;
   const placeholders = ids.map(() => "?").join(", ");
   const result = db.prepare(`DELETE FROM exchanges WHERE id IN (${placeholders})`).run(...ids);
+  invalidateStats();
   emit(null);
   return typeof result === "object" && result !== null && "changes" in result
     ? Number((result as { changes: number }).changes)
@@ -868,6 +916,7 @@ export const deleteExchanges = (ids: string[]) => {
 
 export const deleteAllExchanges = () => {
   db.prepare("DELETE FROM exchanges").run();
+  invalidateStats();
   emit(null);
 };
 
@@ -923,22 +972,22 @@ export const setProvider = (provider: Provider): Provider => {
     provider.defaultMaxTokens ?? null,
     provider.createdAt
   );
-  // Sync provider.models into global models table
+  // Sync provider.models into global models table (always delete first to handle empty list)
   const modelIds = provider.models ?? [];
-  if (modelIds.length > 0) {
-    db.exec("BEGIN");
-    try {
-      db.prepare("DELETE FROM models WHERE provider_id = ?").run(provider.id);
+  db.exec("BEGIN");
+  try {
+    db.prepare("DELETE FROM models WHERE provider_id = ?").run(provider.id);
+    if (modelIds.length > 0) {
       const insertModel = db.prepare("INSERT INTO models (id, object, created, owned_by, provider_id) VALUES (?, ?, ?, ?, ?)");
       const now = Math.floor(Date.now() / 1000);
       for (const id of modelIds) {
         insertModel.run(id, "model", now, provider.id, provider.id);
       }
-      db.exec("COMMIT");
-    } catch (error) {
-      db.exec("ROLLBACK");
-      throw error;
     }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
   }
   emit(null);
   return provider;
@@ -977,6 +1026,7 @@ export const deleteProvider = (id: string): boolean => {
     ? Number((result as { changes: number }).changes)
     : 0;
   if (changes > 0) {
+    db.prepare("DELETE FROM models WHERE provider_id = ?").run(id);
     emit(null);
     return true;
   }

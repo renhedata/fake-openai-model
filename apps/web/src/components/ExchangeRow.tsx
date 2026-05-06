@@ -26,7 +26,7 @@ export const ExchangeRow = memo(function ExchangeRow({
   }, [messages, item.prompt]);
 
   const promptPreview = truncate(lastUserMsg || "(空)", 140);
-  const completionTokens = getCompletionTokens(item.responseBody);
+  const completionTokens = item.completionTokens ?? getCompletionTokens(item.responseBody);
   const totalTokens = item.promptTokens + completionTokens;
   const statusVariant = item.responseStatus === "success" ? "success" : item.responseStatus === "error" ? "error" : "warning";
 

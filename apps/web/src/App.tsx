@@ -36,6 +36,7 @@ export const App = () => {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [expandedItemFull, setExpandedItemFull] = useState<ExchangeRecord | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchInput, setSearchInput] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | "success" | "error" | "pending">("all");
@@ -136,6 +137,16 @@ export const App = () => {
           }
           if (data.latest) {
             const latest = data.latest;
+            // Re-fetch full record if it's currently expanded and has been updated
+            setExpandedId((currentExpandedId) => {
+              if (currentExpandedId === latest.id) {
+                fetch(`/exchanges/${latest.id}`)
+                  .then((r) => r.ok ? r.json() as Promise<ExchangeRecord> : null)
+                  .then((full) => { if (full) setExpandedItemFull(full); })
+                  .catch(() => {});
+              }
+              return currentExpandedId;
+            });
             setPaginatedItems((prev) => {
               const idx = prev.findIndex((i) => i.id === latest.id);
               if (idx >= 0) { const next = [...prev]; next[idx] = latest; return next; }
@@ -347,6 +358,16 @@ export const App = () => {
     );
     observerRef.current.observe(el);
   }, []);
+
+  useEffect(() => {
+    if (!expandedId) { setExpandedItemFull(null); return; }
+    let cancelled = false;
+    fetch(`/exchanges/${expandedId}`)
+      .then((r) => r.ok ? r.json() as Promise<ExchangeRecord> : null)
+      .then((data) => { if (!cancelled && data) setExpandedItemFull(data); })
+      .catch(() => { /* detail stays as list item */ });
+    return () => { cancelled = true; };
+  }, [expandedId]);
 
   const handleRowToggle = useCallback((id: string) => {
     setExpandedId((p) => (p === id ? null : id));
@@ -682,7 +703,7 @@ export const App = () => {
 
         {selectedItem && (
           <div className="flex-1 overflow-hidden bg-base-200/30">
-            <ExchangeDetail item={selectedItem} serial={selectedSerial} onClose={() => setExpandedId(null)} />
+            <ExchangeDetail item={expandedItemFull ?? selectedItem} serial={selectedSerial} onClose={() => setExpandedId(null)} />
           </div>
         )}
       </div>

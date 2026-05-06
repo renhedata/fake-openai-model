@@ -1,6 +1,7 @@
 import { Router } from "express";
 import {
   getExchangesPaginated,
+  getExchangeById,
   deleteExchanges,
   deleteAllExchanges,
 } from "../state.js";
@@ -18,6 +19,12 @@ exchangesRouter.get("/", (req, res) => {
   const agentType = typeof req.query.agentType === "string" ? req.query.agentType : undefined;
   const result = getExchangesPaginated({ cursor, limit, dateFrom, dateTo, status, search, apiKeyId, agentType });
   res.json(result);
+});
+
+exchangesRouter.get("/:id", (req, res) => {
+  const record = getExchangeById(req.params.id);
+  if (!record) { res.status(404).json({ error: { message: "Not found" } }); return; }
+  res.json(record);
 });
 
 exchangesRouter.delete("/", (req, res) => {

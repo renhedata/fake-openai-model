@@ -44,7 +44,8 @@ export type ExchangeRecord = {
   model: string;
   prompt: string;
   promptTokens: number;
-  requestBody: unknown;
+  completionTokens?: number;
+  requestBody?: unknown;
   translatedRequestBody?: unknown;
   createdAt: string;
   completedAt?: string;
