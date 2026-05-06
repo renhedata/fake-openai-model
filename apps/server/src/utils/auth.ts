@@ -10,13 +10,20 @@ export const resolveAuthorization = (req: express.Request, apiKey: string) => {
   return typeof incoming === "string" ? incoming : "";
 };
 
-/** Extract the caller's API key string from Authorization header (strip "Bearer "). */
+/** Extract the caller's API key string from Authorization or x-api-key header. */
 export const extractCallerKey = (req: express.Request): string => {
   const auth = req.header("authorization");
   if (typeof auth === "string" && auth.toLowerCase().startsWith("bearer ")) {
     return auth.slice(7).trim();
   }
-  return typeof auth === "string" ? auth.trim() : "";
+  if (typeof auth === "string") {
+    return auth.trim();
+  }
+  const xApiKey = req.header("x-api-key");
+  if (typeof xApiKey === "string") {
+    return xApiKey.trim();
+  }
+  return "";
 };
 
 /** Result of validating a caller key. */

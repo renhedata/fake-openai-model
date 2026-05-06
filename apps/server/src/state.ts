@@ -329,6 +329,28 @@ const migrations: Migration[] = [
         database.exec(`ALTER TABLE providers ADD COLUMN default_max_tokens INTEGER;`);
       } catch { /* already exists */ }
     }
+  },
+  {
+    version: 10,
+    up: (database) => {
+      // MiniMax uses only OpenAI-compatible API (/v1/chat/completions); it has no /v1/messages endpoint.
+      // Migration v6 incorrectly set it to "claude" format, causing every Anthropic-format request to 404.
+      // Kimi is intentionally left as-is — it may be configured to use /v1/messages (Anthropic format).
+      database.prepare(
+        `UPDATE providers SET format = 'openai' WHERE id = 'minimax' AND format = 'claude'`
+      ).run();
+    }
+  },
+  {
+    version: 11,
+    up: (database) => {
+      // Migration v6 set format='claude' for Anthropic-compatible providers but left their path as the
+      // OpenAI default '/v1/chat/completions'. Claude-format providers use the Anthropic Messages API
+      // at /v1/messages, not /v1/chat/completions.
+      database.prepare(
+        `UPDATE providers SET path = '/v1/messages' WHERE format = 'claude' AND path = '/v1/chat/completions'`
+      ).run();
+    }
   }
 ];
 

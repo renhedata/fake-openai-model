@@ -76,7 +76,12 @@ chatCompletionsRouter.post("/v1/chat/completions", async (req, res) => {
   // --- Resolve provider by model, fallback to legacy proxy_config ---
   const { provider, actualModel, useLegacy } = resolveProviderForModel(model);
   const targetBaseUrl = provider?.baseUrl ?? config.baseUrl;
-  const targetPath = provider?.path ?? config.path;
+  // Claude-format providers use the Anthropic Messages API (/v1/messages).
+  // When translating, ignore the OpenAI default path (/v1/chat/completions) and use /v1/messages.
+  const OPENAI_DEFAULT_PATH = "/v1/chat/completions";
+  const targetPath = needsTranslation
+    ? (provider?.path && provider.path !== OPENAI_DEFAULT_PATH ? provider.path : "/v1/messages")
+    : (provider?.path ?? config.path);
   const targetApiKey = provider?.apiKey ?? config.apiKey;
 
   const startedAt = Date.now();
@@ -232,26 +237,96 @@ chatCompletionsRouter.post("/v1/chat/completions", async (req, res) => {
         return;
       }
 
-      // Native OpenAI SSE (no translation)
-      const extractor = createOaiSseExtractor();
+      // Passthrough streaming: auto-detect upstream format.
+      // Some providers return Anthropic SSE even when sent OpenAI requests — translate to OAI SSE if so.
+      let lineBuffer2 = "";
+      let streamFormat: "oai" | "anthropic" | "unknown" = "unknown";
+      const autoTranslateState = createTranslationState(actualModel);
+      const oaiExtractor = createOaiSseExtractor();
+
+      const processPassthroughLine = (line: string) => {
+        if (capturedRawSse.length < RAW_SSE_LIMIT) capturedRawSse += line + "\n";
+
+        if (streamFormat === "oai") {
+          res.write(line + "\n");
+          oaiExtractor.feed(line + "\n");
+          return;
+        }
+
+        if (streamFormat === "anthropic") {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith("data:")) return;
+          const data = trimmed.slice(5).trim();
+          if (!data) return;
+          try {
+            const parsed = JSON.parse(data) as Record<string, unknown>;
+            const chunks = claudeToOpenAIChunk(parsed, autoTranslateState);
+            if (chunks) {
+              for (const tc of chunks) {
+                const sseLine = `data: ${JSON.stringify(tc)}\n\n`;
+                res.write(sseLine);
+                oaiExtractor.feed(sseLine);
+              }
+            }
+          } catch { /* ignore */ }
+          return;
+        }
+
+        // Format detection on first data line
+        const trimmed = line.trim();
+        if (!trimmed.startsWith("data:")) { res.write(line + "\n"); return; }
+        const data = trimmed.slice(5).trim();
+        if (!data) return;
+        if (data === "[DONE]") {
+          streamFormat = "oai";
+          res.write(line + "\n");
+          oaiExtractor.feed(line + "\n");
+          return;
+        }
+        try {
+          const peek = JSON.parse(data) as Record<string, unknown>;
+          if (peek.object === "chat.completion.chunk" || Array.isArray(peek.choices)) {
+            streamFormat = "oai";
+            res.write(line + "\n");
+            oaiExtractor.feed(line + "\n");
+          } else if (typeof peek.type === "string" && (peek.type.startsWith("message") || peek.type.startsWith("content_block"))) {
+            streamFormat = "anthropic";
+            const chunks = claudeToOpenAIChunk(peek, autoTranslateState);
+            if (chunks) {
+              for (const tc of chunks) {
+                const sseLine = `data: ${JSON.stringify(tc)}\n\n`;
+                res.write(sseLine);
+                oaiExtractor.feed(sseLine);
+              }
+            }
+          } else {
+            streamFormat = "oai";
+            res.write(line + "\n");
+            oaiExtractor.feed(line + "\n");
+          }
+        } catch {
+          res.write(line + "\n");
+        }
+      };
+
       if (upstreamResponse.body) {
         const reader = upstreamResponse.body.getReader();
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
           if (!value) continue;
-          res.write(Buffer.from(value));
-          const chunk = decoder.decode(value, { stream: true });
-          extractor.feed(chunk);
-          if (capturedRawSse.length < RAW_SSE_LIMIT) capturedRawSse += chunk.slice(0, RAW_SSE_LIMIT - capturedRawSse.length);
+          lineBuffer2 += decoder.decode(value, { stream: true });
+          const lines = lineBuffer2.split("\n");
+          lineBuffer2 = lines.pop() ?? "";
+          for (const line of lines) processPassthroughLine(line);
         }
+        if (lineBuffer2) processPassthroughLine(lineBuffer2);
       }
-      const tail = decoder.decode();
-      extractor.feed(tail);
-      if (capturedRawSse.length < RAW_SSE_LIMIT) capturedRawSse += tail.slice(0, RAW_SSE_LIMIT - capturedRawSse.length);
 
+      if (streamFormat === "anthropic") res.write("data: [DONE]\n\n");
       res.end();
-      const extracted = extractor.finish();
+
+      const extracted = oaiExtractor.finish();
       completeExchange(record.id, {
         responseStatus: upstreamResponse.ok ? "success" : "error",
         responseBody: {
@@ -275,11 +350,19 @@ chatCompletionsRouter.post("/v1/chat/completions", async (req, res) => {
     let responseToClient: unknown = upstreamParsed;
     let translatedResponse: Record<string, unknown> | undefined;
 
-    if (needsTranslation && upstreamResponse.ok && typeof upstreamParsed === "object" && upstreamParsed !== null) {
-      // Claude JSON → OpenAI JSON translation
+    if (typeof upstreamParsed === "object" && upstreamParsed !== null && upstreamResponse.ok) {
+      const parsed = upstreamParsed as Record<string, unknown>;
       const toolNameMap = (translatedRequest as { _toolNameMap?: Map<string, string> } | undefined)?._toolNameMap;
-      translatedResponse = claudeToOpenAINonStreaming(upstreamParsed as Record<string, unknown>, toolNameMap);
-      responseToClient = translatedResponse;
+      if (needsTranslation) {
+        // Explicit claude → OpenAI translation
+        translatedResponse = claudeToOpenAINonStreaming(parsed, toolNameMap);
+        responseToClient = translatedResponse;
+      } else if (parsed.type === "message" && Array.isArray(parsed.content)) {
+        // Provider returned Anthropic format despite receiving an OpenAI request (e.g. MiniMax).
+        // Translate back so the client gets the OpenAI format it expects.
+        translatedResponse = claudeToOpenAINonStreaming(parsed, toolNameMap);
+        responseToClient = translatedResponse;
+      }
     }
 
     completeExchange(record.id, {

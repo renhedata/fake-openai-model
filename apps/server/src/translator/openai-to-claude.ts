@@ -3,8 +3,6 @@
  * Based on 9router's open-sse/translator/request/openai-to-claude.js
  */
 
-const CLAUDE_SYSTEM_PROMPT = "You are Claude Code, Anthropic's official CLI for Claude.";
-
 interface ClaudeMessage {
   role: "user" | "assistant";
   content: Array<Record<string, unknown>>;
@@ -14,7 +12,7 @@ interface ClaudeTool {
   name: string;
   description: string;
   input_schema: Record<string, unknown>;
-  cache_control?: { type: string; ttl?: string };
+  cache_control?: { type: string };
 }
 
 interface ClaudeRequest {
@@ -22,7 +20,7 @@ interface ClaudeRequest {
   max_tokens: number;
   stream: boolean;
   messages: ClaudeMessage[];
-  system?: Array<{ type: string; text: string; cache_control?: { type: string; ttl?: string } }>;
+  system?: Array<{ type: string; text: string; cache_control?: { type: string } }>;
   tools?: ClaudeTool[];
   tool_choice?: Record<string, unknown>;
   thinking?: Record<string, unknown>;
@@ -257,16 +255,9 @@ export function openaiToClaudeRequest(model: string, body: Record<string, unknow
     }
   }
 
-  // System with Claude Code prompt
-  const claudeCodePrompt = { type: "text", text: CLAUDE_SYSTEM_PROMPT };
+  // System
   if (systemParts.length > 0) {
-    const systemText = systemParts.join("\n");
-    result.system = [
-      claudeCodePrompt,
-      { type: "text", text: systemText, cache_control: { type: "ephemeral", ttl: "1h" } },
-    ];
-  } else {
-    result.system = [claudeCodePrompt];
+    result.system = [{ type: "text", text: systemParts.join("\n"), cache_control: { type: "ephemeral" } }];
   }
 
   // Tools (support both `tools` and legacy `functions`)
@@ -295,7 +286,7 @@ export function openaiToClaudeRequest(model: string, body: Record<string, unknow
     }
 
     if (result.tools.length > 0) {
-      result.tools[result.tools.length - 1].cache_control = { type: "ephemeral", ttl: "1h" };
+      result.tools[result.tools.length - 1].cache_control = { type: "ephemeral" };
     }
   }
 
