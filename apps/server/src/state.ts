@@ -389,6 +389,22 @@ const migrations: Migration[] = [
     }
   },
   {
+    version: 16,
+    up: (database) => {
+      // Composite indexes: each filter column paired with the sort columns so
+      // ORDER BY created_at DESC, id DESC can be satisfied from the index
+      // without a temp B-tree sort (eliminates "USE TEMP B-TREE FOR ORDER BY").
+      database.exec(`
+        CREATE INDEX IF NOT EXISTS idx_exchanges_status_date
+          ON exchanges (response_status, created_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_exchanges_apikey_date
+          ON exchanges (api_key_id, created_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_exchanges_agenttype_date
+          ON exchanges (agent_type, created_at DESC, id DESC);
+      `);
+    }
+  },
+  {
     version: 15,
     up: (database) => {
       database.exec(`
@@ -428,6 +444,8 @@ const getUserVersion = () => {
 
 const applyMigrations = () => {
   db.exec("PRAGMA journal_mode = WAL");
+  db.exec("PRAGMA temp_store = MEMORY");   // sort in RAM, not temp file
+  db.exec("PRAGMA cache_size = -32000");   // 32 MB page cache
   let userVersion = getUserVersion();
   for (const migration of migrations.sort((a, b) => a.version - b.version)) {
     if (migration.version <= userVersion) {
