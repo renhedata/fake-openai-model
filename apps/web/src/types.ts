@@ -1,5 +1,5 @@
 export type ProxyMode = "forward";
-export type ApiType = "chat_completions" | "responses";
+export type ApiType = "chat_completions" | "messages" | "responses";
 
 export type ProxyConfig = {
   mode: ProxyMode;
@@ -19,7 +19,7 @@ export type Provider = {
   providerType: string;
   baseUrl: string;
   apiKey: string;
-  path: string;
+  path?: string;
   apiType: ApiType;
   format: ProviderFormat;
   authStyle: AuthStyle;

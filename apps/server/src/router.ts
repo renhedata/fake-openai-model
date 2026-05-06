@@ -15,8 +15,9 @@ export const providerSchema = z.object({
   providerType: z.string().default("custom"),
   baseUrl: z.string().min(1),
   apiKey: z.string(),
-  path: z.string().default("/v1/chat/completions"),
-  apiType: z.enum(["chat_completions", "responses"]).default("chat_completions"),
+  // path removed: baseUrl should be the full endpoint URL
+  apiType: z.enum(["chat_completions", "messages", "responses"]).default("chat_completions"),
+  // format is derived from apiType: messages → claude, otherwise → openai
   format: z.enum(["openai", "claude", "gemini", "ollama"]).default("openai"),
   authStyle: z.enum(["bearer", "x-api-key"]).default("bearer"),
   enabled: z.boolean().default(true),

@@ -50,9 +50,7 @@ export const emptyMeta: DashboardMeta = {
 export type BuiltinProviderConfig = {
   name: string;
   baseUrl: string;
-  path: string;
-  apiType: ApiType;
-  format: "openai" | "claude" | "gemini" | "ollama";
+  apiType: ApiType | "messages";
   authStyle: "bearer" | "x-api-key";
   models?: string[];
 };
@@ -61,81 +59,63 @@ export const BUILTIN_PROVIDERS: Record<string, BuiltinProviderConfig> = {
   kimi: {
     name: "Kimi",
     baseUrl: "https://api.kimi.com/coding/v1/messages",
-    path: "",
-    apiType: "chat_completions",
-    format: "claude",
+    apiType: "messages",
     authStyle: "x-api-key",
     models: ["kimi-k2.5", "moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"],
   },
   minimax: {
     name: "MiniMax (国际版)",
     baseUrl: "https://api.minimax.io/anthropic/v1/messages",
-    path: "",
-    apiType: "chat_completions",
-    format: "claude",
+    apiType: "messages",
     authStyle: "x-api-key",
     models: ["MiniMax-Text-01", "abab6.5s-chat"],
   },
   "minimax-cn": {
     name: "MiniMax (中国版)",
     baseUrl: "https://api.minimaxi.com/anthropic/v1/messages",
-    path: "",
-    apiType: "chat_completions",
-    format: "claude",
+    apiType: "messages",
     authStyle: "x-api-key",
     models: ["MiniMax-Text-01", "abab6.5s-chat", "abab7-chat-preview"],
   },
   openai: {
     name: "OpenAI",
     baseUrl: "https://api.openai.com/v1/chat/completions",
-    path: "",
     apiType: "chat_completions",
-    format: "openai",
     authStyle: "bearer",
     models: ["gpt-4o", "gpt-4o-mini", "o3-mini"],
   },
   deepseek: {
     name: "DeepSeek",
     baseUrl: "https://api.deepseek.com/v1/chat/completions",
-    path: "",
     apiType: "chat_completions",
-    format: "openai",
     authStyle: "bearer",
     models: ["deepseek-chat", "deepseek-reasoner"],
   },
   siliconflow: {
     name: "SiliconFlow",
     baseUrl: "https://api.siliconflow.cn/v1/chat/completions",
-    path: "",
     apiType: "chat_completions",
-    format: "openai",
     authStyle: "bearer",
     models: ["deepseek-ai/DeepSeek-V3", "deepseek-ai/DeepSeek-R1"],
   },
   glm: {
     name: "智谱 GLM",
     baseUrl: "https://open.bigmodel.cn/api/paas/v4/chat/completions",
-    path: "",
     apiType: "chat_completions",
-    format: "openai",
     authStyle: "bearer",
     models: ["glm-4", "glm-4-flash", "glm-4-plus"],
   },
   qwen: {
     name: "通义千问",
     baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
-    path: "",
     apiType: "chat_completions",
-    format: "openai",
     authStyle: "bearer",
     models: ["qwen-max", "qwen-plus", "qwen-turbo"],
   },
   custom: {
     name: "自定义",
     baseUrl: "",
-    path: "/v1/chat/completions",
     apiType: "chat_completions",
-    format: "openai",
     authStyle: "bearer",
     models: [],
   },
@@ -152,9 +132,9 @@ export const defaultProviderTemplates: Record<string, Omit<Provider, "id" | "cre
       providerType: key,
       baseUrl: cfg.baseUrl,
       apiKey: "",
-      path: cfg.path,
-      apiType: cfg.apiType,
-      format: cfg.format,
+      apiType: cfg.apiType as ApiType,
+      // derive format from apiType
+      format: cfg.apiType === "messages" ? "claude" : "openai",
       authStyle: cfg.authStyle,
       models: cfg.models ?? [],
     },

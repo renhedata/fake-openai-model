@@ -14,20 +14,18 @@ interface ProviderFormState {
   providerType: string;
   baseUrl: string;
   apiKey: string;
-  path: string;
-  apiType: "chat_completions" | "responses";
-  format: "openai" | "claude" | "gemini" | "ollama";
+  apiType: "chat_completions" | "messages" | "responses";
   authStyle: "bearer" | "x-api-key";
   models: string[];
   defaultMaxTokens: string;
 }
 
 const emptyProviderForm = (): ProviderFormState => ({
-  id: "", name: "", providerType: "custom", baseUrl: "", apiKey: "", path: "/v1/chat/completions", apiType: "chat_completions", format: "openai", authStyle: "bearer", models: [], defaultMaxTokens: "",
+  id: "", name: "", providerType: "custom", baseUrl: "", apiKey: "", apiType: "chat_completions", authStyle: "bearer", models: [], defaultMaxTokens: "",
 });
 
 const providerFormFromProvider = (p: Provider): ProviderFormState => ({
-  id: p.id, name: p.name, providerType: p.providerType, baseUrl: p.baseUrl, apiKey: p.apiKey, path: p.path, apiType: p.apiType, format: p.format, authStyle: p.authStyle, models: p.models ?? [], defaultMaxTokens: p.defaultMaxTokens != null ? String(p.defaultMaxTokens) : "",
+  id: p.id, name: p.name, providerType: p.providerType, baseUrl: p.baseUrl, apiKey: p.apiKey, apiType: (p.apiType as "chat_completions" | "messages" | "responses") ?? "chat_completions", authStyle: p.authStyle, models: p.models ?? [], defaultMaxTokens: p.defaultMaxTokens != null ? String(p.defaultMaxTokens) : "",
 });
 
 export const SettingsDrawer = memo(function SettingsDrawer({
@@ -135,9 +133,7 @@ export const SettingsDrawer = memo(function SettingsDrawer({
       providerType: templateId,
       name: tmpl.name,
       baseUrl: tmpl.baseUrl,
-      path: tmpl.path,
-      apiType: tmpl.apiType,
-      format: tmpl.format,
+      apiType: (tmpl.apiType as "chat_completions" | "messages" | "responses"),
       authStyle: tmpl.authStyle,
       models: tmpl.models ?? [],
     }));
@@ -149,15 +145,16 @@ export const SettingsDrawer = memo(function SettingsDrawer({
     const baseUrl = providerForm.baseUrl.trim();
     if (!name || (isCustom && !baseUrl)) return;
     const id = providerForm.id.trim() || generateProviderId(name);
+    // Derive format from apiType: messages → claude, otherwise → openai
+    const format = providerForm.apiType === "messages" ? "claude" : "openai";
     const payload = {
       id,
       name,
       providerType: providerForm.providerType,
       baseUrl: isCustom ? baseUrl : providerForm.baseUrl.trim(),
       apiKey: providerForm.apiKey.trim(),
-      path: isCustom ? (providerForm.path.trim() || "/v1/chat/completions") : providerForm.path.trim(),
       apiType: providerForm.apiType,
-      format: providerForm.format,
+      format,
       authStyle: providerForm.authStyle,
       models: providerForm.models ?? [],
       ...(providerForm.defaultMaxTokens.trim() ? { defaultMaxTokens: parseInt(providerForm.defaultMaxTokens, 10) } : {}),
@@ -352,55 +349,51 @@ export const SettingsDrawer = memo(function SettingsDrawer({
                     />
                   </div>
 
-                  {/* Show baseUrl/path/apiType for custom or in a collapsed section */}
+                  {/* Show baseUrl + apiType for custom */}
                   {providerForm.providerType === "custom" && (
                     <>
                       <div>
-                        <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-base-content/40">Base URL</label>
+                        <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-base-content/40">Base URL <span className="font-normal text-base-content/25">（完整 endpoint 地址）</span></label>
                         <input
                           className="input input-bordered input-sm w-full bg-base-100 font-mono text-xs"
                           value={providerForm.baseUrl}
                           onChange={(e) => setProviderForm((p) => ({ ...p, baseUrl: e.target.value }))}
-                          placeholder="https://api.example.com/v1"
+                          placeholder="https://api.example.com/anthropic/v1/messages"
                         />
                       </div>
-                      <div className="grid grid-cols-2 gap-2">
-                        <div>
-                          <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-base-content/40">路径</label>
-                          <input
-                            className="input input-bordered input-sm w-full bg-base-100 font-mono text-xs"
-                            value={providerForm.path}
-                            onChange={(e) => setProviderForm((p) => ({ ...p, path: e.target.value }))}
-                            placeholder="/v1/chat/completions"
-                          />
-                        </div>
-                        <div>
-                          <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-base-content/40">API 类型</label>
-                          <select
-                            className="select select-bordered select-sm w-full bg-base-100 text-xs"
-                            value={providerForm.apiType}
-                            onChange={(e) => setProviderForm((p) => ({ ...p, apiType: e.target.value as "chat_completions" | "responses" }))}
-                          >
-                            <option value="chat_completions">Chat</option>
-                            <option value="responses">Responses</option>
-                          </select>
-                        </div>
+                      <div>
+                        <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-base-content/40">API 格式</label>
+                        <select
+                          className="select select-bordered select-sm w-full bg-base-100 text-xs"
+                          value={providerForm.apiType}
+                          onChange={(e) => setProviderForm((p) => ({ ...p, apiType: e.target.value as "chat_completions" | "messages" | "responses" }))}
+                        >
+                          <option value="chat_completions">OpenAI Chat Completions（/v1/chat/completions）</option>
+                          <option value="messages">Anthropic Messages（/anthropic/v1/messages）</option>
+                          <option value="responses">OpenAI Responses（/v1/responses）</option>
+                        </select>
+                        <p className="mt-0.5 text-[9px] text-base-content/25">
+                          {providerForm.apiType === "messages" ? "请求将自动转换为 Anthropic 格式发送" : "请求以 OpenAI 格式直接透传"}
+                        </p>
                       </div>
                     </>
                   )}
 
                   {providerForm.providerType !== "custom" && (
                     <div className="rounded bg-base-200/50 px-2 py-1.5 space-y-0.5">
-                      <p className="font-mono text-[10px] text-base-content/40 truncate">{resolveUpstreamUrl(providerForm.baseUrl, providerForm.path || "")}</p>
+                      <p className="font-mono text-[10px] text-base-content/40 truncate">{providerForm.baseUrl}</p>
                       <div className="flex items-center gap-1.5 text-[10px] text-base-content/30">
-                        <span>API: {providerForm.apiType === "chat_completions" ? "Chat" : "Responses"}</span>
-                        <span className={`rounded px-1 py-0 text-[9px] ${providerForm.format === 'claude' ? 'bg-purple-500/10 text-purple-500/70' : 'bg-base-content/5 text-base-content/30'}`}>{providerForm.format}</span>
-                        <span className={`rounded px-1 py-0 text-[9px] ${providerForm.authStyle === 'x-api-key' ? 'bg-orange-500/10 text-orange-500/70' : 'bg-base-content/5 text-base-content/30'}`}>{providerForm.authStyle}</span>
+                        <span className={`rounded px-1 py-0 text-[9px] ${
+                          providerForm.apiType === "messages" ? "bg-purple-500/10 text-purple-500/70" : "bg-base-content/5 text-base-content/30"
+                        }`}>
+                          {providerForm.apiType === "messages" ? "Anthropic" : providerForm.apiType === "responses" ? "Responses" : "OpenAI"}
+                        </span>
+                        <span className={`rounded px-1 py-0 text-[9px] ${providerForm.authStyle === "x-api-key" ? "bg-orange-500/10 text-orange-500/70" : "bg-base-content/5 text-base-content/30"}`}>{providerForm.authStyle}</span>
                       </div>
                     </div>
                   )}
 
-                  {providerForm.format === "claude" && (
+                  {providerForm.apiType === "messages" && (
                     <div>
                       <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-base-content/40">默认 Max Tokens（留空则用 4096）</label>
                       <input
@@ -445,8 +438,10 @@ export const SettingsDrawer = memo(function SettingsDrawer({
                             <span className="rounded bg-base-200 px-1 py-0 text-[9px] text-base-content/30">
                               {p.providerType}
                             </span>
-                            <span className={`rounded px-1 py-0 text-[9px] font-medium ${p.format === 'claude' ? 'bg-purple-500/10 text-purple-500/70' : 'bg-base-content/5 text-base-content/30'}`}>
-                              {p.format}
+                          <span className={`rounded px-1 py-0 text-[9px] font-medium ${
+                              p.apiType === "messages" ? "bg-purple-500/10 text-purple-500/70" : "bg-base-content/5 text-base-content/30"
+                            }`}>
+                              {p.apiType === "messages" ? "Anthropic" : p.apiType === "responses" ? "Responses" : "OpenAI"}
                             </span>
                             <span className={`rounded px-1 py-0 text-[9px] font-medium ${p.authStyle === 'x-api-key' ? 'bg-orange-500/10 text-orange-500/70' : 'bg-base-content/5 text-base-content/30'}`}>
                               {p.authStyle}
@@ -457,7 +452,7 @@ export const SettingsDrawer = memo(function SettingsDrawer({
                               </span>
                             )}
                           </div>
-                          <p className="mt-0.5 font-mono text-[10px] text-base-content/40 truncate">{resolveUpstreamUrl(p.baseUrl, p.path || "")}</p>
+                          <p className="mt-0.5 font-mono text-[10px] text-base-content/40 truncate">{p.baseUrl}</p>
                         </div>
                         <div className="flex items-center gap-1 shrink-0">
                           <button

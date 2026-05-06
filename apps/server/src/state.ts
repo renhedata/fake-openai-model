@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 
 export type ProxyMode = "forward";
-export type ApiType = "chat_completions" | "responses";
+export type ApiType = "chat_completions" | "messages" | "responses";
 
 export type ProxyConfig = {
   mode: ProxyMode;
@@ -361,6 +361,23 @@ const migrations: Migration[] = [
         `UPDATE providers SET path = '/v1/chat/completions' WHERE id = 'kimi' AND path = '/v1/messages'`
       ).run();
     }
+  },
+  {
+    version: 13,
+    up: (database) => {
+      // Introduce api_type = 'messages' to explicitly signal Anthropic Messages API format.
+      // Update by format='claude' first, then also explicitly set known Anthropic providers
+      // (kimi, minimax, minimax-cn) whose format may have been reset to 'openai' by earlier migrations.
+      database.prepare(
+        `UPDATE providers SET api_type = 'messages', format = 'claude' WHERE format = 'claude'`
+      ).run();
+      const anthropicIds = ['kimi', 'minimax', 'minimax-cn'];
+      for (const pid of anthropicIds) {
+        database.prepare(
+          `UPDATE providers SET api_type = 'messages', format = 'claude' WHERE id = ?`
+        ).run(pid);
+      }
+    }
   }
 ];
 
@@ -483,7 +500,7 @@ const mapProviderRow = (row: Record<string, unknown>): Provider => {
     baseUrl: String(row.base_url),
     apiKey: String(row.api_key),
     path: String(row.path),
-    apiType: row.api_type === "responses" ? "responses" : "chat_completions",
+    apiType: (row.api_type === "responses" ? "responses" : row.api_type === "messages" ? "messages" : "chat_completions") as ApiType,
     format: (typeof row.format === "string" ? row.format : "openai") as ProviderFormat,
     authStyle: (typeof row.auth_style === "string" ? row.auth_style : "bearer") as AuthStyle,
     enabled: row.enabled === 1 || row.enabled === true,
