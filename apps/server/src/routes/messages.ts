@@ -308,7 +308,7 @@ messagesRouter.post("/v1/messages", async (req, res) => {
     forwardAuthStyle = provider?.authStyle ?? "bearer";
   } else {
     // "claude" format — pass through as-is to the upstream Anthropic-compatible endpoint
-    const claudePath = provider?.path && provider.path !== "/v1/chat/completions" ? provider.path : "/v1/messages";
+    const claudePath = provider?.path ?? "/v1/messages";
     try {
       upstreamUrl = resolveUpstreamUrl(targetBaseUrl, claudePath);
     } catch (error) {
