@@ -79,7 +79,7 @@ chatCompletionsRouter.post("/v1/chat/completions", async (req, res) => {
   }
 
   // --- Resolve provider by model, fallback to legacy proxy_config ---
-  const { provider, actualModel, useLegacy } = resolveProviderForModel(model);
+  const { provider, actualModel, useLegacy } = preResolve;
   const targetBaseUrl = provider?.baseUrl ?? config.baseUrl;
   const targetPath = provider?.path ?? config.path;
   const targetApiKey = provider?.apiKey ?? config.apiKey;

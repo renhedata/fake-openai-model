@@ -81,8 +81,7 @@ const TryItPanel = ({ endpoint, buildBody, extractText }: {
 
 export const HelpModal = ({ open, onClose }: { open: boolean; onClose: () => void }) => {
   if (!open) return null;
-  const host = window.location.host;
-  const base = `http://${host}`;
+  const base = window.location.origin;
   return (
     <>
       <div className="fixed inset-0 z-40 bg-black/40" onClick={onClose} />
@@ -140,13 +139,13 @@ const client = new Anthropic({
 });
 
 const resp = await client.messages.create({
-  model: "claude-3-5-sonnet-20241022",
+  model: "claude-sonnet-4-6",
   max_tokens: 1024,
   messages: [{ role: "user", content: "Hello!" }],
 });`}</pre>
               <TryItPanel
                 endpoint="/v1/messages"
-                buildBody={(msg) => ({ model: "claude-3-5-sonnet-20241022", max_tokens: 256, messages: [{ role: "user", content: msg }] })}
+                buildBody={(msg) => ({ model: "claude-sonnet-4-6", max_tokens: 256, messages: [{ role: "user", content: msg }] })}
                 extractText={(data) => {
                   const d = data as { content?: Array<{ type?: string; text?: string }> };
                   return d?.content?.find((b) => b.type === "text")?.text ?? JSON.stringify(data, null, 2);
@@ -163,7 +162,7 @@ const resp = await client.messages.create({
                     <span className="font-semibold text-xs">提供商</span>
                     <Badge variant="default">核心</Badge>
                   </div>
-                  <p className="text-xs text-base-content/55 leading-relaxed">在配置中添加提供商（如 OpenAI、Kimi、MiniMax 等），填写 API Key 后即可使用对应模型。支持 OpenAI 和 Claude 两种格式。</p>
+                  <p className="text-xs text-base-content/55 leading-relaxed">在配置中添加提供商（如 OpenAI、Kimi、MiniMax 等），填写 API Key 后即可使用对应模型。支持 OpenAI、Claude、Gemini、Ollama 四种格式。</p>
                 </div>
                 <div className="rounded-lg border border-base-content/8 bg-base-100 px-3 py-2">
                   <div className="flex items-center gap-2 mb-1">
@@ -183,11 +182,13 @@ const resp = await client.messages.create({
                   <span className="text-base-content/40">格式</span>
                   <span className="text-base-content/40">鉴权</span>
                   <span>OpenAI</span><span>Chat</span><span>Bearer</span>
-                  <span>Anthropic</span><span>Messages</span><span>x-api-key</span>
-                  <span>Kimi</span><span>Messages</span><span>x-api-key</span>
-                  <span>MiniMax</span><span>Messages</span><span>x-api-key</span>
                   <span>DeepSeek</span><span>Chat</span><span>Bearer</span>
                   <span>SiliconFlow</span><span>Chat</span><span>Bearer</span>
+                  <span>智谱 GLM</span><span>Chat</span><span>Bearer</span>
+                  <span>通义千问</span><span>Chat</span><span>Bearer</span>
+                  <span>Kimi</span><span>Messages</span><span>x-api-key</span>
+                  <span>MiniMax 国际</span><span>Messages</span><span>x-api-key</span>
+                  <span>MiniMax 中国</span><span>Messages</span><span>x-api-key</span>
                 </div>
               </div>
             </section>
