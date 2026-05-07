@@ -15,7 +15,7 @@ apiKeysRouter.post("/", (req, res) => {
     res.status(400).json({ error: { message: "Invalid api key payload", detail: parsed.error.issues.map((i) => i.message).join("; ") } });
     return;
   }
-  const key = createApiKey({ id: `key_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, key: generateApiKey(), name: parsed.data.name, allowedModels: parsed.data.allowedModels ?? null });
+  const key = createApiKey({ id: `key_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, key: parsed.data.customKey ?? generateApiKey(), name: parsed.data.name, allowedModels: parsed.data.allowedModels ?? null });
   res.status(201).json(key);
 });
 

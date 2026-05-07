@@ -280,13 +280,13 @@ export const App = () => {
   }, [readErrorMessage]);
 
   // API Key CRUD
-  const onCreateApiKey = useCallback(async (name: string, allowedModels: string[] | null) => {
+  const onCreateApiKey = useCallback(async (name: string, allowedModels: string[] | null, customKey?: string) => {
     setApiKeyLoading(true); setApiKeyError(""); setApiKeySuccess("");
     try {
       const r = await fetch("/proxy/api-keys", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name, allowedModels }),
+        body: JSON.stringify({ name, allowedModels, ...(customKey ? { customKey } : {}) }),
       });
       if (!r.ok) throw new Error(await readErrorMessage(r));
       const created = (await r.json()) as ApiKey;

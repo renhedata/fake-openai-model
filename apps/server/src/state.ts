@@ -822,7 +822,7 @@ export const getExchangesPaginated = (params: {
   const total = Number(countRow.count) || 0;
 
   const rows = db.prepare(
-    `SELECT e.id, e.mode, e.model, e.prompt, e.prompt_tokens, e.completion_tokens, e.created_at, e.completed_at,
+    `SELECT e.id, e.mode, e.model, SUBSTR(e.prompt, 1, 300) AS prompt, e.prompt_tokens, e.completion_tokens, e.created_at, e.completed_at,
      e.response_status, e.error_message, e.upstream_url, e.upstream_status_code, e.duration_ms,
      e.api_key_id, e.api_key_name, e.agent_type FROM exchanges e ${joinClause} ${where}
      ORDER BY e.created_at DESC, e.id DESC LIMIT ?`

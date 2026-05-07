@@ -27,7 +27,8 @@ export const providerSchema = z.object({
 
 export const apiKeyCreateSchema = z.object({
   name: z.string().min(1),
-  allowedModels: z.array(z.string()).nullable().optional()
+  allowedModels: z.array(z.string()).nullable().optional(),
+  customKey: z.string().min(8).optional()
 });
 
 export const upstreamModelSchema = z

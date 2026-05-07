@@ -72,7 +72,7 @@ export const SettingsDrawer = memo(function SettingsDrawer({
   apiKeyLoading: boolean;
   apiKeyError: string;
   apiKeySuccess: string;
-  onCreateApiKey: (name: string, allowedModels: string[] | null) => void;
+  onCreateApiKey: (name: string, allowedModels: string[] | null, customKey?: string) => void;
   onUpdateApiKey: (id: string, allowedModels: string[] | null) => void;
   onDeleteApiKey: (id: string) => void;
   onClose: () => void;
@@ -103,6 +103,7 @@ export const SettingsDrawer = memo(function SettingsDrawer({
   // API Key form state
   const [apiKeyName, setApiKeyName] = useState("");
   const [apiKeyAllowedModels, setApiKeyAllowedModels] = useState("");
+  const [apiKeyCustomKey, setApiKeyCustomKey] = useState("");
 
   // API Key edit state
   const [editingKeyId, setEditingKeyId] = useState<string | null>(null);
@@ -218,9 +219,11 @@ export const SettingsDrawer = memo(function SettingsDrawer({
     const allowed = apiKeyAllowedModels.trim()
       ? apiKeyAllowedModels.split(",").map((s) => s.trim()).filter(Boolean)
       : null;
-    onCreateApiKey(name, allowed && allowed.length > 0 ? allowed : null);
+    const customKey = apiKeyCustomKey.trim() || undefined;
+    onCreateApiKey(name, allowed && allowed.length > 0 ? allowed : null, customKey);
     setApiKeyName("");
     setApiKeyAllowedModels("");
+    setApiKeyCustomKey("");
   };
 
   const copyToClipboard = async (text: string, id: string) => {
@@ -640,6 +643,17 @@ export const SettingsDrawer = memo(function SettingsDrawer({
                     placeholder="kimi-k2.5, MiniMax-M2, ..."
                   />
                   <p className="mt-0.5 text-[9px] text-base-content/25">用逗号分隔多个模型 ID</p>
+                </div>
+                <div>
+                  <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-base-content/40">
+                    自定义 Key <span className="font-normal text-base-content/25">（留空自动生成）</span>
+                  </label>
+                  <input
+                    className="input input-bordered input-sm w-full bg-base-100 font-mono text-xs"
+                    value={apiKeyCustomKey}
+                    onChange={(e) => setApiKeyCustomKey(e.target.value)}
+                    placeholder="sk-my-key（至少 8 位）"
+                  />
                 </div>
                 <div className="flex justify-end">
                   <button
