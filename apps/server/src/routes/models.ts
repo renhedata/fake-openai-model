@@ -109,7 +109,7 @@ modelsRouter.post("/proxy/models", (req, res) => {
 });
 
 modelsRouter.delete("/proxy/models/*", (req, res) => {
-  const modelId = (req.params as Record<string, string>)[0];
+  const modelId = (req.params as unknown as Record<string, string>)[0];
   const deleted = deleteModel(modelId);
   if (!deleted) {
     res.status(404).json({ error: { message: `Model '${modelId}' not found` } });
