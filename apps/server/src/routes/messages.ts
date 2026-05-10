@@ -111,7 +111,7 @@ const handleMessagesStream = async (
           } else if (oaiTextBlockOpen) {
             nextBlockIdx = 1;
           }
-          oaiToolBlocks[idx] = { id: tc.id ?? "", name: tc.function?.name ?? "", contentBlockIdx: nextBlockIdx, started: false };
+          oaiToolBlocks[idx] = { id: tc.id ?? "", name: "", contentBlockIdx: nextBlockIdx, started: false };
           nextBlockIdx++;
         }
         const block = oaiToolBlocks[idx];
