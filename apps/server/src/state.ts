@@ -1070,7 +1070,7 @@ export const setProvider = (provider: Provider): Provider => {
     provider.providerType,
     provider.baseUrl,
     provider.apiKey,
-    provider.path,
+    provider.path ?? pathFromApiType(provider.apiType),
     provider.apiType,
     provider.format,
     provider.authStyle,
