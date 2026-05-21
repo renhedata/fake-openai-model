@@ -34,6 +34,18 @@ chatCompletionsRouter.post("/v1/chat/completions", async (req, res) => {
 
   // Pre-resolve provider to know if translation is needed for the record
   const preResolve = resolveProviderForModel(model);
+
+  // Reject unknown models — don't proxy upstream
+  if (preResolve.useLegacy) {
+    res.status(404).json({
+      error: {
+        message: `Model '${model}' not found`,
+        type: "invalid_request_error",
+      },
+    });
+    return;
+  }
+
   // Translation needed when provider uses Anthropic Messages API format (apiType === "messages")
   // or legacy explicit claude format. User sets this explicitly in the UI.
   const needsTranslation =

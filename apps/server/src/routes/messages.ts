@@ -272,6 +272,18 @@ messagesRouter.post("/v1/messages", async (req, res) => {
 
   // --- Resolve provider by model, fallback to legacy proxy_config ---
   const { provider, actualModel, useLegacy } = resolveProviderForModel(model);
+
+  // Reject unknown models — don't proxy upstream
+  if (useLegacy) {
+    res.status(404).json({
+      error: {
+        message: `Model '${model}' not found`,
+        type: "invalid_request_error",
+      },
+    });
+    return;
+  }
+
   const targetBaseUrl = provider?.baseUrl ?? config.baseUrl;
   const targetApiKey = provider?.apiKey ?? config.apiKey;
 

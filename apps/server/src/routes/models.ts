@@ -19,7 +19,7 @@ export const modelsRouter = Router();
 modelsRouter.get("/v1/models", async (req, res) => {
   const providerId = typeof req.query.provider === "string" ? req.query.provider : undefined;
 
-  // If a specific provider is requested, proxy to that provider
+  // If a specific provider is requested, proxy to that provider's /v1/models
   if (providerId) {
     const provider = getProviderById(providerId);
     if (!provider) {
@@ -48,35 +48,10 @@ modelsRouter.get("/v1/models", async (req, res) => {
       }
       return;
     } catch {
-      // Fallback to local models
-    }
-  }
-
-  // Legacy behavior
-  const config = getProxyConfig();
-  if (config.mode === "forward" && config.baseUrl.trim()) {
-    try {
-      const modelsUrl = resolveUpstreamUrl(config.baseUrl, "/v1/models");
-      const authorization = resolveAuthorization(req, config.apiKey);
-      const upstreamRes = await fetch(modelsUrl, {
-        method: "GET",
-        headers: {
-          ...(authorization ? { authorization } : {}),
-        },
-        signal: AbortSignal.timeout(30_000),
-      });
-      const text = await upstreamRes.text();
-      const contentType = upstreamRes.headers.get("content-type") ?? "";
-      if (contentType.includes("application/json")) {
-        res.status(upstreamRes.status).json(JSON.parse(text));
-      } else {
-        res.status(upstreamRes.status).type(contentType || "text/plain").send(text);
-      }
-      return;
-    } catch {
       // Fallback to local models on network error
     }
   }
+
   const models = getModels();
   res.json({
     object: "list",

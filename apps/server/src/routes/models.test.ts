@@ -129,3 +129,21 @@ describe("DELETE /proxy/models/*", () => {
     expect(status).toBe(404);
   });
 });
+
+describe("GET /v1/models", () => {
+  beforeEach(() => {
+    mockModels.splice(0, mockModels.length, {
+      id: "gpt-4",
+      object: "model",
+      created: 1000,
+      owned_by: "upstream",
+    });
+  });
+
+  it("returns local models without proxying upstream", async () => {
+    const { status, body } = await req("GET", "/v1/models");
+    expect(status).toBe(200);
+    expect(body.object).toBe("list");
+    expect(body.data.some((m: ModelRecord) => m.id === "gpt-4")).toBe(true);
+  });
+});
