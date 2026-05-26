@@ -12,13 +12,9 @@ export const proxyConfigSchema = z.object({
 export const providerSchema = z.object({
   id: z.string().min(1).regex(/^[a-zA-Z0-9_-]+$/).optional(),
   name: z.string().min(1),
-  providerType: z.string().default("custom"),
   baseUrl: z.string().min(1),
   apiKey: z.string(),
-  // path removed: baseUrl should be the full endpoint URL
-  apiType: z.enum(["chat_completions", "messages", "responses"]).default("chat_completions"),
-  // format is derived from apiType: messages → claude, otherwise → openai
-  format: z.enum(["openai", "claude", "gemini", "ollama"]).default("openai"),
+  format: z.enum(["openai", "claude"]).default("openai"),
   authStyle: z.enum(["bearer", "x-api-key"]).default("bearer"),
   enabled: z.boolean().default(true),
   models: z.array(z.string()).default([]),

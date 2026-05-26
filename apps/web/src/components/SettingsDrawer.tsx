@@ -11,21 +11,20 @@ type TabKey = "providers" | "apikeys";
 interface ProviderFormState {
   id: string;
   name: string;
-  providerType: string;
   baseUrl: string;
   apiKey: string;
-  apiType: "chat_completions" | "messages" | "responses";
+  format: ProviderFormat;
   authStyle: "bearer" | "x-api-key";
   models: string[];
   defaultMaxTokens: string;
 }
 
 const emptyProviderForm = (): ProviderFormState => ({
-  id: "", name: "", providerType: "custom", baseUrl: "", apiKey: "", apiType: "chat_completions", authStyle: "bearer", models: [], defaultMaxTokens: "",
+  id: "", name: "", baseUrl: "", apiKey: "", format: "openai", authStyle: "bearer", models: [], defaultMaxTokens: "",
 });
 
 const providerFormFromProvider = (p: Provider): ProviderFormState => ({
-  id: p.id, name: p.name, providerType: p.providerType, baseUrl: p.baseUrl, apiKey: p.apiKey, apiType: (p.apiType as "chat_completions" | "messages" | "responses") ?? "chat_completions", authStyle: p.authStyle, models: p.models ?? [], defaultMaxTokens: p.defaultMaxTokens != null ? String(p.defaultMaxTokens) : "",
+  id: p.id, name: p.name, baseUrl: p.baseUrl, apiKey: p.apiKey, format: p.format, authStyle: p.authStyle, models: p.models ?? [], defaultMaxTokens: p.defaultMaxTokens != null ? String(p.defaultMaxTokens) : "",
 });
 
 export const SettingsDrawer = memo(function SettingsDrawer({
@@ -131,31 +130,25 @@ export const SettingsDrawer = memo(function SettingsDrawer({
     if (!tmpl) return;
     setProviderForm((prev) => ({
       ...prev,
-      providerType: templateId,
       name: tmpl.name,
       baseUrl: tmpl.baseUrl,
-      apiType: (tmpl.apiType as "chat_completions" | "messages" | "responses"),
+      format: tmpl.format,
       authStyle: tmpl.authStyle,
       models: tmpl.models ?? [],
     }));
   };
 
   const handleProviderSubmit = () => {
-    const isCustom = providerForm.providerType === "custom";
     const name = providerForm.name.trim();
     const baseUrl = providerForm.baseUrl.trim();
-    if (!name || (isCustom && !baseUrl)) return;
+    if (!name || !baseUrl) return;
     const id = providerForm.id.trim() || generateProviderId(name);
-    // Derive format from apiType: messages → claude, otherwise → openai
-    const format = (providerForm.apiType === "messages" ? "claude" : "openai") as ProviderFormat;
     const payload = {
       id,
       name,
-      providerType: providerForm.providerType,
-      baseUrl: isCustom ? baseUrl : providerForm.baseUrl.trim(),
+      baseUrl,
       apiKey: providerForm.apiKey.trim(),
-      apiType: providerForm.apiType,
-      format,
+      format: providerForm.format,
       authStyle: providerForm.authStyle,
       models: providerForm.models ?? [],
       ...(providerForm.defaultMaxTokens.trim() ? { defaultMaxTokens: parseInt(providerForm.defaultMaxTokens, 10) } : {}),
@@ -305,20 +298,6 @@ export const SettingsDrawer = memo(function SettingsDrawer({
                     </button>
                   </div>
 
-                  {/* Provider Type */}
-                  <div>
-                    <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-base-content/40">提供商类型</label>
-                    <select
-                      className="select select-bordered select-sm w-full bg-base-100 text-xs"
-                      value={providerForm.providerType}
-                      onChange={(e) => { const val = e.target.value; setProviderTemplate(val); handleApplyTemplate(val); }}
-                    >
-                      {Object.entries(BUILTIN_PROVIDERS).map(([key, cfg]) => (
-                        <option key={key} value={key}>{cfg.name}</option>
-                      ))}
-                    </select>
-                  </div>
-
                   <div className="grid grid-cols-2 gap-2">
                     <div>
                       <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-base-content/40">名称</label>
@@ -342,6 +321,16 @@ export const SettingsDrawer = memo(function SettingsDrawer({
                   </div>
 
                   <div>
+                    <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-base-content/40">Base URL <span className="font-normal text-base-content/25">（填写到 v1 级别，如 https://api.openai.com/v1）</span></label>
+                    <input
+                      className="input input-bordered input-sm w-full bg-base-100 font-mono text-xs"
+                      value={providerForm.baseUrl}
+                      onChange={(e) => setProviderForm((p) => ({ ...p, baseUrl: e.target.value }))}
+                      placeholder="https://api.example.com/v1"
+                    />
+                  </div>
+
+                  <div>
                     <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-base-content/40">API Key</label>
                     <input
                       className="input input-bordered input-sm w-full bg-base-100 font-mono text-xs"
@@ -352,51 +341,32 @@ export const SettingsDrawer = memo(function SettingsDrawer({
                     />
                   </div>
 
-                  {/* Show baseUrl + apiType for custom */}
-                  {providerForm.providerType === "custom" && (
-                    <>
-                      <div>
-                        <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-base-content/40">Base URL <span className="font-normal text-base-content/25">（完整 endpoint 地址）</span></label>
-                        <input
-                          className="input input-bordered input-sm w-full bg-base-100 font-mono text-xs"
-                          value={providerForm.baseUrl}
-                          onChange={(e) => setProviderForm((p) => ({ ...p, baseUrl: e.target.value }))}
-                          placeholder="https://api.example.com/anthropic/v1/messages"
-                        />
-                      </div>
-                      <div>
-                        <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-base-content/40">API 格式</label>
-                        <select
-                          className="select select-bordered select-sm w-full bg-base-100 text-xs"
-                          value={providerForm.apiType}
-                          onChange={(e) => setProviderForm((p) => ({ ...p, apiType: e.target.value as "chat_completions" | "messages" | "responses" }))}
-                        >
-                          <option value="chat_completions">OpenAI Chat Completions（/v1/chat/completions）</option>
-                          <option value="messages">Anthropic Messages（/anthropic/v1/messages）</option>
-                          <option value="responses">OpenAI Responses（/v1/responses）</option>
-                        </select>
-                        <p className="mt-0.5 text-[9px] text-base-content/25">
-                          {providerForm.apiType === "messages" ? "请求将自动转换为 Anthropic 格式发送" : "请求以 OpenAI 格式直接透传"}
-                        </p>
-                      </div>
-                    </>
-                  )}
-
-                  {providerForm.providerType !== "custom" && (
-                    <div className="rounded bg-base-200/50 px-2 py-1.5 space-y-0.5">
-                      <p className="font-mono text-[10px] text-base-content/40 truncate">{providerForm.baseUrl}</p>
-                      <div className="flex items-center gap-1.5 text-[10px] text-base-content/30">
-                        <span className={`rounded px-1 py-0 text-[9px] ${
-                          providerForm.apiType === "messages" ? "bg-purple-500/10 text-purple-500/70" : "bg-base-content/5 text-base-content/30"
-                        }`}>
-                          {providerForm.apiType === "messages" ? "Anthropic" : providerForm.apiType === "responses" ? "Responses" : "OpenAI"}
-                        </span>
-                        <span className={`rounded px-1 py-0 text-[9px] ${providerForm.authStyle === "x-api-key" ? "bg-orange-500/10 text-orange-500/70" : "bg-base-content/5 text-base-content/30"}`}>{providerForm.authStyle}</span>
-                      </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-base-content/40">格式</label>
+                      <select
+                        className="select select-bordered select-sm w-full bg-base-100 text-xs"
+                        value={providerForm.format}
+                        onChange={(e) => setProviderForm((p) => ({ ...p, format: e.target.value as ProviderFormat }))}
+                      >
+                        <option value="openai">OpenAI（/v1/chat/completions）</option>
+                        <option value="claude">Anthropic（/v1/messages）</option>
+                      </select>
                     </div>
-                  )}
+                    <div>
+                      <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-base-content/40">鉴权方式</label>
+                      <select
+                        className="select select-bordered select-sm w-full bg-base-100 text-xs"
+                        value={providerForm.authStyle}
+                        onChange={(e) => setProviderForm((p) => ({ ...p, authStyle: e.target.value as "bearer" | "x-api-key" }))}
+                      >
+                        <option value="bearer">Bearer Token</option>
+                        <option value="x-api-key">x-api-key</option>
+                      </select>
+                    </div>
+                  </div>
 
-                  {providerForm.apiType === "messages" && (
+                  {providerForm.format === "claude" && (
                     <div>
                       <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-base-content/40">默认 Max Tokens（留空则用 4096）</label>
                       <input
@@ -416,7 +386,7 @@ export const SettingsDrawer = memo(function SettingsDrawer({
                       type="button"
                       className="btn btn-primary btn-xs h-6 min-h-0 text-xs"
                       onClick={handleProviderSubmit}
-                      disabled={!providerForm.name.trim() || (providerForm.providerType === "custom" && !providerForm.baseUrl.trim()) || providerLoading}
+                      disabled={!providerForm.name.trim() || !providerForm.baseUrl.trim() || providerLoading}
                     >
                       {providerLoading ? <Loader2 size={11} className="animate-spin" /> : editingProviderId ? "保存" : "添加"}
                     </button>
@@ -438,13 +408,10 @@ export const SettingsDrawer = memo(function SettingsDrawer({
                             <span className={`rounded px-1 py-0 text-[9px] font-medium ${p.enabled ? "bg-success/10 text-success" : "bg-base-content/5 text-base-content/30"}`}>
                               {p.enabled ? "启用" : "禁用"}
                             </span>
-                            <span className="rounded bg-base-200 px-1 py-0 text-[9px] text-base-content/30">
-                              {p.providerType}
-                            </span>
-                          <span className={`rounded px-1 py-0 text-[9px] font-medium ${
-                              p.apiType === "messages" ? "bg-purple-500/10 text-purple-500/70" : "bg-base-content/5 text-base-content/30"
+                            <span className={`rounded px-1 py-0 text-[9px] font-medium ${
+                              p.format === "claude" ? "bg-purple-500/10 text-purple-500/70" : "bg-base-content/5 text-base-content/30"
                             }`}>
-                              {p.apiType === "messages" ? "Anthropic" : p.apiType === "responses" ? "Responses" : "OpenAI"}
+                              {p.format === "claude" ? "Anthropic" : "OpenAI"}
                             </span>
                             <span className={`rounded px-1 py-0 text-[9px] font-medium ${p.authStyle === 'x-api-key' ? 'bg-orange-500/10 text-orange-500/70' : 'bg-base-content/5 text-base-content/30'}`}>
                               {p.authStyle}

@@ -13,7 +13,7 @@ import {
 import { extractPromptText, detectAgentType } from "../utils/prompt.js";
 import { resolveProviderForModel, getTestModel } from "../utils/provider-resolution.js";
 import { extractCallerKey, validateCallerKey } from "../utils/auth.js";
-import { resolveUpstreamUrl } from "../utils/url.js";
+import { resolveUpstreamUrl, joinUrl } from "../utils/url.js";
 import { buildForwardHeaders } from "../utils/headers.js";
 import { createOaiSseExtractor } from "../utils/sse-extractors.js";
 import { tryParseJson } from "../utils/json.js";
@@ -46,11 +46,8 @@ chatCompletionsRouter.post("/v1/chat/completions", async (req, res) => {
     return;
   }
 
-  // Translation needed when provider uses Anthropic Messages API format (apiType === "messages")
-  // or legacy explicit claude format. User sets this explicitly in the UI.
-  const needsTranslation =
-    preResolve.provider?.apiType === "messages" ||
-    preResolve.provider?.format === "claude";
+  // Translation needed when provider uses Anthropic Messages API format.
+  const needsTranslation = preResolve.provider?.format === "claude";
   let translatedRequest: Record<string, unknown> | undefined;
   if (needsTranslation) {
     translatedRequest = openaiToClaudeRequest(preResolve.actualModel, body, stream, preResolve.provider?.defaultMaxTokens) as unknown as Record<string, unknown>;
@@ -93,13 +90,17 @@ chatCompletionsRouter.post("/v1/chat/completions", async (req, res) => {
   // --- Resolve provider by model, fallback to legacy proxy_config ---
   const { provider, actualModel, useLegacy } = preResolve;
   const targetBaseUrl = provider?.baseUrl ?? config.baseUrl;
-  const targetPath = provider?.path ?? config.path;
   const targetApiKey = provider?.apiKey ?? config.apiKey;
 
   const startedAt = Date.now();
   let upstreamUrl = "";
   try {
-    upstreamUrl = resolveUpstreamUrl(targetBaseUrl, targetPath);
+    if (provider) {
+      const providerPath = provider.format === "claude" ? "messages" : "chat/completions";
+      upstreamUrl = joinUrl(provider.baseUrl, providerPath);
+    } else {
+      upstreamUrl = resolveUpstreamUrl(targetBaseUrl, config.path);
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : "invalid upstream config";
     completeExchange(record.id, {

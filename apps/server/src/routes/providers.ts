@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { providerSchema, generateProviderId, upstreamModelsResponseSchema } from "../router.js";
 import { getProviders, getProviderById, setProvider, deleteProvider, setProviderModels, getModels, type Provider } from "../state.js";
-import { resolveUpstreamUrl } from "../utils/url.js";
+import { joinUrl } from "../utils/url.js";
 import { extractResponsePreview } from "../utils/response-preview.js";
 import { tryParseJson } from "../utils/json.js";
 
@@ -65,16 +65,17 @@ providersRouter.post("/:id/test", async (req, res) => {
     res.status(404).json({ error: { message: `Provider '${req.params.id}' not found` } });
     return;
   }
+  const upstreamPath = provider.format === "claude" ? "messages" : "chat/completions";
   let upstreamUrl = "";
   try {
-    upstreamUrl = resolveUpstreamUrl(provider.baseUrl, provider.path);
+    upstreamUrl = joinUrl(provider.baseUrl, upstreamPath);
   } catch (error) {
     res.status(400).json({ error: { message: "Invalid provider config", detail: error instanceof Error ? error.message : "invalid upstream url" } });
     return;
   }
   const model = provider.models?.[0] ?? getModels().find((m) => m.providerId === provider.id)?.id ?? "gpt-4o-mini";
-  const body = provider.apiType === "responses"
-    ? { model, input: "Ping. Reply with pong.", max_output_tokens: 32, stream: false }
+  const body = provider.format === "claude"
+    ? { model, messages: [{ role: "user", content: "Ping. Reply with pong." }], max_tokens: 32, stream: false }
     : { model, messages: [{ role: "user", content: "Ping. Reply with pong." }], max_tokens: 32, stream: false };
   // Build headers respecting provider auth style
   const testHeaders: Record<string, string> = { "content-type": "application/json" };
@@ -98,7 +99,7 @@ providersRouter.post("/:id/test", async (req, res) => {
     });
     const text = await upstreamResponse.text();
     const payload = tryParseJson(text);
-    res.json({ ok: upstreamResponse.ok, apiType: provider.apiType, model, upstreamUrl, upstreamStatusCode: upstreamResponse.status, durationMs: Date.now() - startedAt, preview: extractResponsePreview(payload), raw: payload });
+    res.json({ ok: upstreamResponse.ok, format: provider.format, model, upstreamUrl, upstreamStatusCode: upstreamResponse.status, durationMs: Date.now() - startedAt, preview: extractResponsePreview(payload), raw: payload });
   } catch (error) {
     res.status(502).json({ error: { message: "Upstream test failed", detail: error instanceof Error ? error.message : "unknown upstream error" } });
   }
@@ -112,7 +113,7 @@ providersRouter.post("/:id/refresh", async (req, res) => {
   }
   let modelsUrl = "";
   try {
-    modelsUrl = resolveUpstreamUrl(provider.baseUrl, "/v1/models");
+    modelsUrl = joinUrl(provider.baseUrl, "models");
   } catch (error) {
     res.status(400).json({ error: { message: "Invalid provider baseUrl", detail: error instanceof Error ? error.message : "baseUrl is invalid" } });
     return;

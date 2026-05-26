@@ -16,17 +16,14 @@ export type ProxyConfig = {
   modelOverride: string;
 };
 
-export type ProviderFormat = "openai" | "claude" | "gemini" | "ollama";
+export type ProviderFormat = "openai" | "claude";
 export type AuthStyle = "bearer" | "x-api-key";
 
 export type Provider = {
   id: string;
   name: string;
-  providerType: string;
   baseUrl: string;
   apiKey: string;
-  path?: string;
-  apiType: ApiType;
   format: ProviderFormat;
   authStyle: AuthStyle;
   enabled: boolean;
@@ -610,15 +607,14 @@ const mapProviderRow = (row: Record<string, unknown>): Provider => {
       if (Array.isArray(parsed)) models = parsed as string[];
     } catch { /* ignore */ }
   }
+  const rawFormat = typeof row.format === "string" ? row.format : "";
+  const format: ProviderFormat = rawFormat === "openai" || rawFormat === "claude" ? rawFormat : "openai";
   return {
     id: String(row.id),
     name: String(row.name),
-    providerType: typeof row.provider_type === "string" ? row.provider_type : "custom",
     baseUrl: String(row.base_url),
     apiKey: String(row.api_key),
-    path: String(row.path),
-    apiType: (row.api_type === "responses" ? "responses" : row.api_type === "messages" ? "messages" : "chat_completions") as ApiType,
-    format: (typeof row.format === "string" ? row.format : "openai") as ProviderFormat,
+    format,
     authStyle: (typeof row.auth_style === "string" ? row.auth_style : "bearer") as AuthStyle,
     enabled: row.enabled === 1 || row.enabled === true,
     models,
@@ -1067,11 +1063,11 @@ export const setProvider = (provider: Provider): Provider => {
   ).run(
     provider.id,
     provider.name,
-    provider.providerType,
+    "custom",
     provider.baseUrl,
     provider.apiKey,
-    provider.path ?? pathFromApiType(provider.apiType),
-    provider.apiType,
+    "",
+    provider.format === "claude" ? "messages" : "chat_completions",
     provider.format,
     provider.authStyle,
     provider.enabled ? 1 : 0,

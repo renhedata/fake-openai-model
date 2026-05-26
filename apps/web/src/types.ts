@@ -10,17 +10,14 @@ export type ProxyConfig = {
   modelOverride: string;
 };
 
-export type ProviderFormat = "openai" | "claude" | "gemini" | "ollama";
+export type ProviderFormat = "openai" | "claude";
 export type AuthStyle = "bearer" | "x-api-key";
 
 export type Provider = {
   id: string;
   name: string;
-  providerType: string;
   baseUrl: string;
   apiKey: string;
-  path?: string;
-  apiType: ApiType;
   format: ProviderFormat;
   authStyle: AuthStyle;
   enabled: boolean;
@@ -85,7 +82,7 @@ export type DashboardEvent = {
 
 export type UpstreamTestResult = {
   ok: boolean;
-  apiType: ApiType;
+  format: ProviderFormat;
   model: string;
   upstreamUrl: string;
   upstreamStatusCode: number;

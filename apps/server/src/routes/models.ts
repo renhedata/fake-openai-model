@@ -10,7 +10,7 @@ import {
   type ModelRecord,
 } from "../state.js";
 import { resolveAuthorization } from "../utils/auth.js";
-import { resolveUpstreamUrl } from "../utils/url.js";
+import { resolveUpstreamUrl, joinUrl } from "../utils/url.js";
 import { extractResponsePreview } from "../utils/response-preview.js";
 import { tryParseJson } from "../utils/json.js";
 
@@ -27,7 +27,7 @@ modelsRouter.get("/v1/models", async (req, res) => {
       return;
     }
     try {
-      const modelsUrl = resolveUpstreamUrl(provider.baseUrl, "/v1/models");
+      const modelsUrl = joinUrl(provider.baseUrl, "models");
       const providerModelHeaders: Record<string, string> = {};
       if (provider.authStyle === "x-api-key") {
         if (provider.apiKey.trim()) providerModelHeaders["x-api-key"] = provider.apiKey.trim();
@@ -187,18 +187,17 @@ modelsRouter.post("/proxy/models/:modelId/test", async (req, res) => {
     return;
   }
 
+  const upstreamPath = provider.format === "claude" ? "messages" : "chat/completions";
   let upstreamUrl = "";
   try {
-    upstreamUrl = resolveUpstreamUrl(provider.baseUrl, provider.path);
+    upstreamUrl = joinUrl(provider.baseUrl, upstreamPath);
   } catch (error) {
     res.status(400).json({ error: { message: "Invalid provider config", detail: error instanceof Error ? error.message : "invalid upstream url" } });
     return;
   }
 
   const actualModel = modelId; // use the raw model id
-  const body = provider.apiType === "responses"
-    ? { model: actualModel, input: "Ping. Reply with pong.", max_output_tokens: 32, stream: false }
-    : { model: actualModel, messages: [{ role: "user", content: "Ping. Reply with pong." }], max_tokens: 32, stream: false };
+  const body = { model: actualModel, messages: [{ role: "user", content: "Ping. Reply with pong." }], max_tokens: 32, stream: false };
 
   const testHeaders: Record<string, string> = { "content-type": "application/json" };
   if (provider.authStyle === "x-api-key") {
@@ -218,7 +217,7 @@ modelsRouter.post("/proxy/models/:modelId/test", async (req, res) => {
     });
     const text = await upstreamResponse.text();
     const payload = tryParseJson(text);
-    res.json({ ok: upstreamResponse.ok, apiType: provider.apiType, model: actualModel, upstreamUrl, upstreamStatusCode: upstreamResponse.status, durationMs: Date.now() - startedAt, preview: extractResponsePreview(payload), raw: payload });
+    res.json({ ok: upstreamResponse.ok, format: provider.format, model: actualModel, upstreamUrl, upstreamStatusCode: upstreamResponse.status, durationMs: Date.now() - startedAt, preview: extractResponsePreview(payload), raw: payload });
   } catch (error) {
     res.status(502).json({ error: { message: "Upstream test failed", detail: error instanceof Error ? error.message : "unknown upstream error" } });
   }
