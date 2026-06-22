@@ -1,7 +1,7 @@
 import { memo, useMemo } from "react";
-import { CheckCircle2, ChevronDown, ChevronRight, Loader2, XCircle } from "lucide-react";
+import { Bot, CheckCircle2, ChevronDown, ChevronRight, Loader2, XCircle } from "lucide-react";
 import type { ExchangeRecord } from "../types";
-import { extractMessages, formatTime, formatTimeFull, getCompletionTokens, truncate } from "../utils";
+import { extractMessages, formatTime, formatTimeFull, getCompletionTokens, getResponseText, truncate } from "../utils";
 import { Badge } from "./Atoms";
 
 export const ExchangeRow = memo(function ExchangeRow({
@@ -25,7 +25,14 @@ export const ExchangeRow = memo(function ExchangeRow({
     return item.prompt;
   }, [messages, item.prompt]);
 
-  const promptPreview = truncate(lastUserMsg || "(空)", 140);
+  const promptPreview = useMemo(() => {
+    const text = (lastUserMsg || "").replace(/\s+/g, " ").trim();
+    return text ? truncate(text, 400) : "(空)";
+  }, [lastUserMsg]);
+  const responsePreview = useMemo(() => {
+    const text = getResponseText(item.responseBody);
+    return text ? truncate(text.replace(/\s+/g, " ").trim(), 280) : "";
+  }, [item.responseBody]);
   const completionTokens = item.completionTokens ?? getCompletionTokens(item.responseBody);
   const totalTokens = item.promptTokens + completionTokens;
   const statusVariant = item.responseStatus === "success" ? "success" : item.responseStatus === "error" ? "error" : "warning";
@@ -52,9 +59,10 @@ export const ExchangeRow = memo(function ExchangeRow({
 
         <button
           type="button"
-          className="flex flex-1 items-center gap-2 text-left transition-colors hover:bg-base-content/[0.02] min-w-0 overflow-hidden"
+          className="flex flex-1 flex-col gap-0.5 text-left transition-colors hover:bg-base-content/[0.02] min-w-0 overflow-hidden"
           onClick={() => onToggle(item.id)}
         >
+          <div className="flex w-full items-center gap-2 min-w-0">
           {expanded
             ? <ChevronDown size={14} className="shrink-0 text-primary" />
             : <ChevronRight size={14} className="shrink-0 text-base-content/30" />}
@@ -101,11 +109,21 @@ export const ExchangeRow = memo(function ExchangeRow({
             </Badge>
           )}
 
-          <span className="min-w-0 flex-1 truncate text-xs text-base-content/50">{promptPreview}</span>
-
-          <span className="shrink-0 text-[10px] text-base-content/25" title={formatTimeFull(item.createdAt)}>
+          <span className="ml-auto shrink-0 text-[10px] text-base-content/25" title={formatTimeFull(item.createdAt)}>
             {formatTime(item.createdAt)}
           </span>
+          </div>
+
+          <div className="w-full min-w-0 pl-[22px]">
+            <p className={`text-xs leading-relaxed text-base-content/60 break-words ${compact ? "line-clamp-2" : "line-clamp-3"}`}>{promptPreview}</p>
+          </div>
+
+          {!compact && responsePreview && (
+            <div className="flex w-full items-start gap-1.5 min-w-0 pl-[22px]">
+              <Bot size={11} className="mt-px shrink-0 text-success/50" />
+              <span className="min-w-0 flex-1 line-clamp-2 text-[11px] text-base-content/40">{responsePreview}</span>
+            </div>
+          )}
         </button>
       </div>
     </div>
