@@ -383,6 +383,12 @@ messagesRouter.post("/v1/messages", async (req, res) => {
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown upstream error";
     completeExchange(record.id, { responseStatus: "error", errorMessage: message, upstreamUrl, durationMs: Date.now() - startedAt });
+    // If streaming already started, headers/body are flushed — we can't send a
+    // JSON error (that throws ERR_HTTP_HEADERS_SENT and masks the real error).
+    if (res.headersSent) {
+      res.end();
+      return;
+    }
     res.status(502).json({ error: { message: "Upstream request failed", type: "api_error", detail: message } });
   }
 });

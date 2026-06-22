@@ -85,6 +85,12 @@ transparentProxyRouter.all("/v1/*", async (req, res) => {
     }
     res.end();
   } catch (error) {
+    // If streaming already started, headers/body are flushed — we can't send a
+    // JSON error (that throws ERR_HTTP_HEADERS_SENT and masks the real error).
+    if (res.headersSent) {
+      res.end();
+      return;
+    }
     res.status(502).json({
       error: {
         message: "Upstream request failed",
