@@ -56,6 +56,7 @@ export type ExchangeRecord = {
   apiKeyId?: string;
   apiKeyName?: string;
   agentType?: "openclaw" | "hermes" | null;
+  lastUserMessage?: string;
 };
 
 export type ExchangeStats = {

@@ -19,11 +19,12 @@ export const ExchangeRow = memo(function ExchangeRow({
   const messages = useMemo(() => extractMessages(item.requestBody), [item.requestBody]);
 
   const lastUserMsg = useMemo(() => {
+    if (item.lastUserMessage?.trim()) return item.lastUserMessage;
     for (let i = messages.length - 1; i >= 0; i--) {
       if (messages[i].role === "user" && messages[i].content.trim()) return messages[i].content;
     }
     return item.prompt;
-  }, [messages, item.prompt]);
+  }, [messages, item.lastUserMessage, item.prompt]);
 
   const promptPreview = useMemo(() => {
     const text = (lastUserMsg || "").replace(/\s+/g, " ").trim();

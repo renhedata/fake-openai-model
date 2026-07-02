@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
+import { extractLastUserText } from "./utils/prompt.js";
 
 export type ProxyMode = "forward";
 export type ApiType = "chat_completions" | "messages" | "responses";
@@ -70,6 +71,7 @@ export type ExchangeRecord = {
   apiKeyId?: string;
   apiKeyName?: string;
   agentType?: "openclaw" | "hermes" | null;
+  lastUserMessage?: string;
 };
 
 export type ExchangeStats = {
@@ -436,6 +438,23 @@ const migrations: Migration[] = [
     }
   },
   {
+    version: 17,
+    up: (database) => {
+      database.exec(`ALTER TABLE exchanges ADD COLUMN last_user_message TEXT;`);
+      const rows = database.prepare("SELECT id, request_body, prompt FROM exchanges").all() as Array<{ id: string; request_body: string | null; prompt: string }>;
+      const update = database.prepare("UPDATE exchanges SET last_user_message = ? WHERE id = ?");
+      for (const row of rows) {
+        let text = "";
+        try {
+          const body = JSON.parse(row.request_body ?? "null") as Record<string, unknown>;
+          if (body) text = extractLastUserText(body);
+        } catch { /* ignore */ }
+        if (!text) text = row.prompt;
+        update.run(text, row.id);
+      }
+    }
+  },
+  {
     version: 15,
     up: (database) => {
       database.exec(`
@@ -579,7 +598,8 @@ const mapExchangeRow = (row: Record<string, unknown>, full = false): ExchangeRec
   durationMs: typeof row.duration_ms === "number" ? row.duration_ms : undefined,
   apiKeyId: typeof row.api_key_id === "string" ? row.api_key_id : undefined,
   apiKeyName: typeof row.api_key_name === "string" ? row.api_key_name : undefined,
-  agentType: (typeof row.agent_type === "string" ? row.agent_type : undefined) as ExchangeRecord["agentType"]
+  agentType: (typeof row.agent_type === "string" ? row.agent_type : undefined) as ExchangeRecord["agentType"],
+  lastUserMessage: typeof row.last_user_message === "string" ? row.last_user_message : undefined,
 });
 
 const mapProxyConfigRow = (row: Record<string, unknown>): ProxyConfig => ({
@@ -657,6 +677,7 @@ export const addExchange = (params: {
   apiKeyName?: string;
   agentType?: "openclaw" | "hermes" | null;
 }) => {
+  const lastUserMessage = extractLastUserText(params.requestBody as Record<string, unknown>) || params.prompt;
   const record: ExchangeRecord = {
     id: `x_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     mode: params.mode,
@@ -669,13 +690,14 @@ export const addExchange = (params: {
     responseStatus: "pending",
     apiKeyId: params.apiKeyId,
     apiKeyName: params.apiKeyName,
-    agentType: params.agentType
+    agentType: params.agentType,
+    lastUserMessage,
   };
   db.prepare(
     `INSERT INTO exchanges (
       id, mode, model, prompt, prompt_tokens, request_body, translated_request_body, created_at, response_status,
-      api_key_id, api_key_name, agent_type
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      api_key_id, api_key_name, agent_type, last_user_message
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     record.id,
     record.mode,
@@ -688,7 +710,8 @@ export const addExchange = (params: {
     record.responseStatus,
     record.apiKeyId ?? null,
     record.apiKeyName ?? null,
-    record.agentType ?? null
+    record.agentType ?? null,
+    record.lastUserMessage
   );
   invalidateStats();
   emit(record);
@@ -734,7 +757,7 @@ export const completeExchange = (
   const targetRow = db.prepare(
     `SELECT id, mode, model, prompt, prompt_tokens, completion_tokens, created_at, completed_at,
      response_status, error_message, upstream_url, upstream_status_code, duration_ms,
-     api_key_id, api_key_name, agent_type FROM exchanges WHERE id = ?`
+     api_key_id, api_key_name, agent_type, last_user_message FROM exchanges WHERE id = ?`
   ).get(id) as Record<string, unknown> | undefined;
   if (!targetRow) {
     return null;
@@ -820,7 +843,7 @@ export const getExchangesPaginated = (params: {
   const rows = db.prepare(
     `SELECT e.id, e.mode, e.model, SUBSTR(e.prompt, 1, 300) AS prompt, e.prompt_tokens, e.completion_tokens, e.created_at, e.completed_at,
      e.response_status, e.error_message, e.upstream_url, e.upstream_status_code, e.duration_ms,
-     e.api_key_id, e.api_key_name, e.agent_type FROM exchanges e ${joinClause} ${where}
+     e.api_key_id, e.api_key_name, e.agent_type, SUBSTR(e.last_user_message, 1, 300) AS last_user_message FROM exchanges e ${joinClause} ${where}
      ORDER BY e.created_at DESC, e.id DESC LIMIT ?`
   ).all(...args, limit + 1) as Array<Record<string, unknown>>;
 

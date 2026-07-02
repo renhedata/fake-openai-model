@@ -29,6 +29,7 @@ type ExchangeRecord = {
   apiKeyId?: string;
   apiKeyName?: string;
   agentType?: "openclaw" | "hermes" | null;
+  lastUserMessage?: string;
 };
 
 type PaginatedResult = {
@@ -94,6 +95,7 @@ const mapRow = (row: Record<string, unknown>): ExchangeRecord => ({
   apiKeyId: typeof row.api_key_id === "string" ? row.api_key_id : undefined,
   apiKeyName: typeof row.api_key_name === "string" ? row.api_key_name : undefined,
   agentType: (typeof row.agent_type === "string" ? row.agent_type : undefined) as ExchangeRecord["agentType"],
+  lastUserMessage: typeof row.last_user_message === "string" ? row.last_user_message : undefined,
 });
 
 const runQuery = (params: QueryParams): PaginatedResult => {
@@ -133,7 +135,7 @@ const runQuery = (params: QueryParams): PaginatedResult => {
     .prepare(
       `SELECT e.id, e.mode, e.model, SUBSTR(e.prompt, 1, 300) AS prompt, e.prompt_tokens, e.completion_tokens, e.created_at, e.completed_at,
        e.response_status, e.error_message, e.upstream_url, e.upstream_status_code, e.duration_ms,
-       e.api_key_id, e.api_key_name, e.agent_type FROM exchanges e ${joinClause} ${where}
+       e.api_key_id, e.api_key_name, e.agent_type, SUBSTR(e.last_user_message, 1, 300) AS last_user_message FROM exchanges e ${joinClause} ${where}
        ORDER BY e.created_at DESC, e.id DESC LIMIT ?`
     )
     .all(...args, limit + 1) as Array<Record<string, unknown>>;
