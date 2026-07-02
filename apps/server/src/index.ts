@@ -17,7 +17,22 @@ import { transparentProxyRouter } from "./routes/transparent-proxy.js";
 import { requestLogMiddleware } from "./utils/log.js";
 
 const app = express();
-const port = Number(process.env.PORT ?? 3001);
+const parsePort = (value: string | undefined): number => {
+  const parsed = Number(value ?? 3001);
+  if (!Number.isInteger(parsed) || parsed <= 0 || parsed > 65535) {
+    throw new Error(`Invalid PORT value: ${value ?? "3001"}`);
+  }
+  return parsed;
+};
+
+const port = (() => {
+  try {
+    return parsePort(process.env.PORT);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
+})();
 
 app.use(cors({
   origin: (origin, callback) => {
@@ -73,6 +88,17 @@ if (serveStatic) {
   });
 }
 
-app.listen(port, () => {
+const server = app.listen(port, () => {
   console.log(`server running on http://localhost:${port}`);
+});
+
+server.on("error", (error: NodeJS.ErrnoException) => {
+  const details = [
+    `failed to start server on port ${port}`,
+    error.code ? `code=${error.code}` : undefined,
+    error.message,
+  ].filter(Boolean).join(" ");
+
+  console.error(details);
+  process.exit(1);
 });

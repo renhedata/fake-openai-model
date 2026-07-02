@@ -4,9 +4,7 @@ services:
       context: .
       target: runner
     environment:
-      - PORT=3000
-    # ports:
-    #   - "3000:3000"
+      - PORT=3001
     volumes:
       - ./data:/app/data
     healthcheck:
@@ -15,7 +13,7 @@ services:
           "CMD",
           "bun",
           "-e",
-          "const r = await fetch('http://localhost:3000/health'); if (!r.ok) process.exit(1);",
+          "const r = await fetch('http://localhost:3001/health'); if (!r.ok) process.exit(1);",
         ]
       interval: 10s
       timeout: 5s
